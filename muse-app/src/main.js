@@ -221,7 +221,7 @@ function renderHome() {
   return `
     <div class="home">
       <header class="home-header">
-        <h1 class="home-title">缪时的家</h1>
+        <h1 class="home-title">缪时和Yuxin的家</h1>
         <p class="home-subtitle">我们共同的小角落</p>
       </header>
       <div class="scene-cards">
