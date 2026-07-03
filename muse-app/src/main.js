@@ -226,11 +226,15 @@ function renderHome() {
       </header>
       <div class="scene-cards">
         <button class="scene-card" data-room="living">
-          <div class="scene-thumb living-thumb"></div>
+          <div class="scene-thumb living-thumb">
+            <span class="book-cover-icon">🛋️</span>
+          </div>
           <span class="scene-label">客厅</span>
         </button>
         <button class="scene-card" data-room="bedroom">
-          <div class="scene-thumb bedroom-thumb"></div>
+          <div class="scene-thumb bedroom-thumb">
+            <span class="book-cover-icon">🪔</span>
+          </div>
           <span class="scene-label">卧室</span>
         </button>
         <button class="scene-card" data-room="memory">
