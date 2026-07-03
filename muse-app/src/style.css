@@ -1,0 +1,265 @@
+:root {
+  --bg: #0e0b14;
+  --bg-card: #1a1424;
+  --bg-input: #120f1c;
+  --accent: #8b1a4a;
+  --accent-light: #c04070;
+  --purple: #4a1a6e;
+  --text: #e8e0f0;
+  --text-muted: #7a6a8a;
+  --border: #2a1f3a;
+  --radius: 12px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  width: 100%;
+  max-width: 420px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Home ── */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding-bottom: 48px;
+}
+
+.home-header {
+  padding: 64px 24px 48px;
+  text-align: center;
+}
+
+.home-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 6px;
+  background: linear-gradient(135deg, #c04070, #8b4ac0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 10px;
+}
+
+.home-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  letter-spacing: 3px;
+}
+
+.rooms {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px;
+}
+
+.room-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 16px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.room-card:active {
+  background: #221830;
+  border-color: var(--accent);
+}
+
+.room-icon {
+  font-size: 30px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.room-info {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.room-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 2px;
+}
+
+.room-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.room-arrow {
+  font-size: 24px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* ── Room page ── */
+
+.room-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 100vh;
+}
+
+.room-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+  min-height: 52px;
+}
+
+.back-btn {
+  position: absolute;
+  left: 16px;
+  background: none;
+  border: none;
+  color: var(--accent-light);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 0;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.room-header-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: var(--text);
+}
+
+/* ── Input area ── */
+
+.input-area {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 16px;
+  font-family: inherit;
+  padding: 12px;
+  resize: none;
+  width: 100%;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+textarea:focus {
+  border-color: var(--accent);
+}
+
+textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.add-btn {
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 13px;
+  cursor: pointer;
+  letter-spacing: 3px;
+  font-family: inherit;
+  transition: opacity 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.add-btn:active {
+  opacity: 0.75;
+}
+
+/* ── Messages ── */
+
+.messages {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 48px;
+  letter-spacing: 1px;
+}
+
+.message-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-text {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.message-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
