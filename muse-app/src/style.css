@@ -25,7 +25,6 @@ body {
 
 #app {
   width: 100%;
-  max-width: 420px;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -38,7 +37,25 @@ body {
   flex-direction: column;
   flex: 1;
   padding-bottom: 48px;
+  background: url('/home-bg.png') center center / cover no-repeat;
+  position: relative;
 }
+
+.home::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(8, 4, 16, 0.55) 0%,
+    rgba(8, 4, 16, 0.35) 40%,
+    rgba(8, 4, 16, 0.7)  100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+.home > * { position: relative; z-index: 1; }
 
 .home-header {
   padding: 64px 24px 44px;
@@ -247,7 +264,7 @@ body {
   left: 50%;
   transform: translateX(-50%) translateY(100%);
   width: 100%;
-  max-width: 420px;
+  max-width: 100%;
   background: #18101e;
   border-radius: 20px 20px 0 0;
   border: 1px solid var(--border);
