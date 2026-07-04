@@ -310,6 +310,12 @@ textarea {
 textarea:focus     { border-color: var(--accent); }
 textarea::placeholder { color: var(--text-muted); }
 
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .add-btn {
   background: linear-gradient(135deg, var(--accent), var(--purple));
   border: none;
@@ -319,13 +325,46 @@ textarea::placeholder { color: var(--text-muted); }
   font-weight: 600;
   padding: 13px;
   cursor: pointer;
-  letter-spacing: 3px;
+  letter-spacing: 2px;
   font-family: inherit;
   transition: opacity 0.15s;
-  flex-shrink: 0;
+  flex: 1;
 }
 
 .add-btn:active { opacity: 0.75; }
+
+.muse-btn {
+  background: linear-gradient(135deg, #2a1040, #1a0830);
+  border: 1px solid #5a2a7a;
+  border-radius: 8px;
+  color: #c8a0e8;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 13px 14px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  font-family: inherit;
+  transition: opacity 0.15s, border-color 0.15s;
+  flex: 1;
+  white-space: nowrap;
+}
+
+.muse-btn:active  { opacity: 0.75; }
+.muse-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 缪时的留言样式 */
+.message-item.from-muse {
+  background: linear-gradient(135deg, #1e0e30, #180828);
+  border-color: #4a2068;
+}
+
+.muse-tag {
+  font-size: 11px;
+  color: #c8a0e8;
+  letter-spacing: 1.5px;
+  margin-bottom: 2px;
+  display: block;
+}
 
 .msg-list {
   display: flex;

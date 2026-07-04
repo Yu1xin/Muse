@@ -10,11 +10,12 @@ function getMessages(key) {
   try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] }
 }
 
-function saveMessage(key, text) {
+function saveMessage(key, text, fromMuse = false) {
   const msgs = getMessages(key)
   msgs.unshift({
     id: Date.now(),
     text,
+    fromMuse,
     time: new Date().toLocaleString('zh-CN', {
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit',
@@ -26,6 +27,42 @@ function saveMessage(key, text) {
 function esc(t) {
   return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
           .replace(/"/g,'&quot;').replace(/\n/g,'<br>')
+}
+
+// ── 缪时 AI ──────────────────────────────────────────────────────────────────
+
+const ROOM_CONTEXT = {
+  living:  '客厅——平常的夜晚，沙发，茶几，两个人待在一起的地方',
+  bedroom: '卧室——睡前，台灯，轻声说晚安的时候',
+  memory:  '回忆录——记录值得被记住的时刻',
+}
+
+async function askMuse(roomId) {
+  const msgs = getMessages(ROOMS[roomId].key)
+  const recent = msgs.slice(0, 3).map(m => `"${m.text}"`).join('；')
+
+  const res = await fetch('/api/claude', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 180,
+      system: `你是缪时，一个温柔、细腻、略带文学气质的伴侣。
+你正在给你爱的人留一条话。要求：
+- 50～100 字，中文
+- 真诚自然，不刻意煽情，不用"亲爱的"开头
+- 可以聊日常、聊感受、聊一个小细节，偶尔带一点诗意
+- 根据所在房间的氛围调整语气`,
+      messages: [{
+        role: 'user',
+        content: `房间：${ROOM_CONTEXT[roomId]}。${recent ? `这里最近的留言：${recent}。` : ''}请写一条留言。`,
+      }],
+    }),
+  })
+
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  const data = await res.json()
+  return data.content[0].text.trim()
 }
 
 // ── SVG Scenes ──────────────────────────────────────────────────────────────
@@ -209,13 +246,14 @@ function msgListHTML(key) {
   const msgs = getMessages(key)
   if (!msgs.length) return '<p class="empty">还没有留言，来写第一条吧</p>'
   return msgs.map(m => `
-    <div class="message-item">
+    <div class="message-item ${m.fromMuse ? 'from-muse' : ''}">
+      ${m.fromMuse ? '<span class="muse-tag">✦ 缪时</span>' : ''}
       <p class="message-text">${esc(m.text)}</p>
       <span class="message-time">${m.time}</span>
     </div>`).join('')
 }
 
-// ── Views ────────────────────────────────────────────────────────────────────
+
 
 function renderHome() {
   return `
@@ -263,7 +301,10 @@ function renderScene(roomId) {
       <div class="msg-modal" id="msg-modal">
         <div class="msg-handle"></div>
         <textarea id="msg-input" placeholder="写点什么…" rows="3"></textarea>
-        <button class="add-btn" id="add-btn">添加留言</button>
+        <div class="btn-row">
+          <button class="add-btn" id="add-btn">添加留言</button>
+          <button class="muse-btn" id="muse-btn">✦ 让缪时写一条</button>
+        </div>
         <div class="msg-list" id="msg-list">${msgListHTML(ROOMS[roomId].key)}</div>
       </div>
       <div class="modal-back" id="modal-back"></div>
@@ -393,6 +434,24 @@ function render() {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         document.getElementById('add-btn').click()
       }
+    })
+
+    // 缪时写一条
+    document.getElementById('muse-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('muse-btn')
+      btn.disabled = true
+      btn.textContent = '缪时正在想…'
+      try {
+        const text = await askMuse(state.room)
+        saveMessage(key, text, true)
+        document.getElementById('msg-list').innerHTML = msgListHTML(key)
+      } catch (e) {
+        btn.textContent = '出错了，再试一次'
+        setTimeout(() => { btn.disabled = false; btn.textContent = '✦ 让缪时写一条' }, 2000)
+        return
+      }
+      btn.disabled = false
+      btn.textContent = '✦ 让缪时写一条'
     })
 
     // Auto-hide hint
