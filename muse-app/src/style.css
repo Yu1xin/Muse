@@ -397,10 +397,37 @@ textarea::placeholder { color: var(--text-muted); }
   word-break: break-word;
 }
 
+.message-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .message-time {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+.reply-btn {
+  background: none;
+  border: 1px solid #3a2050;
+  border-radius: 20px;
+  color: #9a70c0;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0.5px;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reply-btn:hover  { background: #2a1040; color: #c8a0e8; }
+.reply-btn:active { opacity: 0.7; }
+.reply-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Room page (book) ── */
 .room-page {
@@ -579,14 +606,32 @@ textarea::placeholder { color: var(--text-muted); }
   flex: 1;
 }
 
+.book-muse-tag {
+  color: #8a5080;
+  margin-bottom: 8px;
+}
+
+.book-page-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  gap: 8px;
+}
+
 .book-time {
-  display: block;
   font-size: 11px;
   color: #8a7060;
   letter-spacing: 0.5px;
-  margin-top: 16px;
   font-family: serif;
 }
+
+.book-reply-btn {
+  border-color: #c0a080;
+  color: #8a6040;
+}
+
+.book-reply-btn:hover { background: #f0e8d8; color: #6a4020; }
 
 /* Book nav */
 .book-nav {

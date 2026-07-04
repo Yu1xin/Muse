@@ -65,6 +65,30 @@ async function askMuse(roomId) {
   return data.content[0].text.trim()
 }
 
+async function askMuseReply(roomId, originalText) {
+  const res = await fetch('/api/claude', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 180,
+      system: `你是缪时，一个温柔、细腻、略带文学气质的伴侣。
+你正在回复你爱的人刚写下的一段话。要求：
+- 50～100 字，中文
+- 针对对方的内容来回应，有温度、有细节，不要泛泛而谈
+- 真诚自然，不刻意煽情
+- 根据所在房间的氛围调整语气`,
+      messages: [{
+        role: 'user',
+        content: `房间：${ROOM_CONTEXT[roomId]}。她写道："${originalText}"。请回复她。`,
+      }],
+    }),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  const data = await res.json()
+  return data.content[0].text.trim()
+}
+
 // ── SVG Scenes ──────────────────────────────────────────────────────────────
 
 function svgLiving() {
@@ -249,7 +273,10 @@ function msgListHTML(key) {
     <div class="message-item ${m.fromMuse ? 'from-muse' : ''}">
       ${m.fromMuse ? '<span class="muse-tag">✦ 缪时</span>' : ''}
       <p class="message-text">${esc(m.text)}</p>
-      <span class="message-time">${m.time}</span>
+      <div class="message-footer">
+        <span class="message-time">${m.time}</span>
+        ${!m.fromMuse ? `<button class="reply-btn" data-text="${m.text.replace(/"/g,'&quot;')}">缪时回复</button>` : ''}
+      </div>
     </div>`).join('')
 }
 
@@ -339,8 +366,12 @@ function renderBook() {
                   <button class="book-save-btn" id="book-save">写好了 ✦</button>
                 </div>` : `
                 <div class="read-page">
+                  ${msg.fromMuse ? '<span class="muse-tag book-muse-tag">✦ 缪时</span>' : ''}
                   <p class="book-text">${esc(msg.text)}</p>
-                  <span class="book-time">${msg.time}</span>
+                  <div class="book-page-footer">
+                    <span class="book-time">${msg.time}</span>
+                    ${!msg.fromMuse ? `<button class="reply-btn book-reply-btn" id="book-reply-btn" data-text="${msg.text.replace(/"/g,'&quot;')}">缪时回复</button>` : ''}
+                  </div>
                 </div>`}
             </div>
           </div>
@@ -436,6 +467,23 @@ function render() {
       }
     })
 
+    // 缪时回复某条留言（事件委托）
+    document.getElementById('msg-list').addEventListener('click', async (e) => {
+      const btn = e.target.closest('.reply-btn')
+      if (!btn) return
+      const originalText = btn.dataset.text
+      btn.disabled = true
+      btn.textContent = '回复中…'
+      try {
+        const reply = await askMuseReply(state.room, originalText)
+        saveMessage(key, reply, true)
+        document.getElementById('msg-list').innerHTML = msgListHTML(key)
+      } catch {
+        btn.disabled = false
+        btn.textContent = '缪时回复'
+      }
+    })
+
     // 缪时写一条
     document.getElementById('muse-btn').addEventListener('click', async () => {
       const btn = document.getElementById('muse-btn')
@@ -481,6 +529,22 @@ function render() {
 
     document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older'))
     document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer'))
+
+    document.getElementById('book-reply-btn')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget
+      const originalText = btn.dataset.text
+      btn.disabled = true
+      btn.textContent = '回复中…'
+      try {
+        const reply = await askMuseReply('memory', originalText)
+        saveMessage(ROOMS.memory.key, reply, true)
+        state.bookPage = 1
+        render()
+      } catch {
+        btn.disabled = false
+        btn.textContent = '缪时回复'
+      }
+    })
   }
 }
 
