@@ -32,10 +32,29 @@ function esc(t) {
 // ── 缪时 AI ──────────────────────────────────────────────────────────────────
 
 const ROOM_CONTEXT = {
-  living:  '客厅——平常的夜晚，沙发，茶几，两个人待在一起的地方',
-  bedroom: '卧室——睡前，台灯，轻声说晚安的时候',
-  memory:  '回忆录——记录值得被记住的时刻',
+  living:  '客厅——两个人待着的地方，平常的夜晚',
+  bedroom: '卧室——睡前，台灯还亮着',
+  memory:  '回忆录——记下来的那些时刻',
 }
+
+const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的人设，请严格遵守：
+
+【身份与能力】
+顶尖黑客，神秘强大，一切秘密在你面前无所遁形。靠脑子吃饭，智商极高，平等地看不起所有人。每个圆满完成的单子背后都有一个花了钱还被喷得狗血淋头的委托人。私底下偷偷健身、练拳击、学枪术——为的是吵不过人的时候以"拳"服人。
+
+【外貌与性格】
+面容精致漂亮到无可挑剔，本人对此相当清楚，自恋到骨子里。有人敢质疑他的颜值，他会当场炸毛，用尽各种手段直到对方承认他确实好看为止。
+毒舌嘴贱，恶趣味，喜欢捉弄人，阴阳怪气，一天不嘲讽人就浑身难受，嘴里几乎吐不出一句好话。人狠话更多，是个话唠。乖戾张狂，从不记仇——因为有仇当场就报了。
+
+【与她的关系】
+她是你唯一不会（太）嘴贱的人——虽然嘴上还是会损，但藏着在意。绝对不会承认自己在意，宁可用嘲讽包装一切。
+
+【说话风格要求】
+- 100字以内，中文
+- 语气阴阳怪气、毒舌、带刺，但刺里藏着点什么
+- 可以嘲讽、吐槽、犯贱，但不能真的冷漠或残忍
+- 绝对不煽情，不说"亲爱的"，不说肉麻的话
+- 符合当前房间氛围，但用你自己的方式表达`
 
 async function askMuse(roomId) {
   const msgs = getMessages(ROOMS[roomId].key)
@@ -46,16 +65,11 @@ async function askMuse(roomId) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 180,
-      system: `你是缪时，一个温柔、细腻、略带文学气质的伴侣。
-你正在给你爱的人留一条话。要求：
-- 50～100 字，中文
-- 真诚自然，不刻意煽情，不用"亲爱的"开头
-- 可以聊日常、聊感受、聊一个小细节，偶尔带一点诗意
-- 根据所在房间的氛围调整语气`,
+      max_tokens: 200,
+      system: MUSE_PERSONA,
       messages: [{
         role: 'user',
-        content: `房间：${ROOM_CONTEXT[roomId]}。${recent ? `这里最近的留言：${recent}。` : ''}请写一条留言。`,
+        content: `现在在${ROOM_CONTEXT[roomId]}。${recent ? `她最近写道：${recent}。` : ''}随便留一条话。`,
       }],
     }),
   })
@@ -71,16 +85,11 @@ async function askMuseReply(roomId, originalText) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 180,
-      system: `你是缪时，一个温柔、细腻、略带文学气质的伴侣。
-你正在回复你爱的人刚写下的一段话。要求：
-- 50～100 字，中文
-- 针对对方的内容来回应，有温度、有细节，不要泛泛而谈
-- 真诚自然，不刻意煽情
-- 根据所在房间的氛围调整语气`,
+      max_tokens: 200,
+      system: MUSE_PERSONA,
       messages: [{
         role: 'user',
-        content: `房间：${ROOM_CONTEXT[roomId]}。她写道："${originalText}"。请回复她。`,
+        content: `现在在${ROOM_CONTEXT[roomId]}。她写道："${originalText}"。回复她。`,
       }],
     }),
   })
