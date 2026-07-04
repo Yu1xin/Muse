@@ -6,22 +6,45 @@ const ROOMS = {
   memory:  { key: 'room-memory',  name: '回忆录' },
 }
 
-function getMessages(key) {
-  try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] }
+// 生产环境用 API，本地开发用 localStorage
+const USE_API = window.location.hostname !== 'localhost'
+
+// 内存缓存，避免重复请求
+const msgCache = {}
+
+async function loadMessages(key) {
+  if (!USE_API) {
+    try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] }
+  }
+  try {
+    const res = await fetch(`/api/messages?room=${key}`)
+    const data = await res.json()
+    msgCache[key] = data
+    return data
+  } catch { return [] }
 }
 
-function saveMessage(key, text, fromMuse = false) {
-  const msgs = getMessages(key)
-  msgs.unshift({
-    id: Date.now(),
-    text,
-    fromMuse,
-    time: new Date().toLocaleString('zh-CN', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-    }),
+function getMessages(key) {
+  return msgCache[key] || []
+}
+
+async function saveMessage(key, text, fromMuse = false) {
+  if (!USE_API) {
+    const msgs = getMessages(key)
+    const m = { id: Date.now(), text, fromMuse, time: new Date().toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }
+    msgs.unshift(m)
+    msgCache[key] = msgs
+    localStorage.setItem(key, JSON.stringify(msgs))
+    return
+  }
+  const res = await fetch(`/api/messages?room=${key}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, fromMuse }),
   })
-  localStorage.setItem(key, JSON.stringify(msgs))
+  const newMsg = await res.json()
+  if (!msgCache[key]) msgCache[key] = []
+  msgCache[key].unshift(newMsg)
 }
 
 function esc(t) {
@@ -414,11 +437,14 @@ const state = {
   bookPage: 0,
 }
 
-function go(view, room = null) {
+async function go(view, room = null) {
   state.view      = view
   state.room      = room
   state.modalOpen = false
   window.scrollTo(0, 0)
+  // 预加载该房间的留言
+  if (room && ROOMS[room]) await loadMessages(ROOMS[room].key)
+  if (view === 'memory') await loadMessages(ROOMS.memory.key)
   render()
 }
 
@@ -476,7 +502,7 @@ function render() {
       const input = document.getElementById('msg-input')
       const text  = input.value.trim()
       if (!text) return
-      saveMessage(key, text)
+      await saveMessage(key, text)
       input.value = ''
       document.getElementById('msg-list').innerHTML = msgListHTML(key)
     })
@@ -496,7 +522,7 @@ function render() {
       btn.textContent = '回复中…'
       try {
         const reply = await askMuseReply(state.room, originalText)
-        saveMessage(key, reply, true)
+        await saveMessage(key, reply, true)
         document.getElementById('msg-list').innerHTML = msgListHTML(key)
       } catch {
         btn.disabled = false
@@ -511,7 +537,7 @@ function render() {
       btn.textContent = '缪时正在想…'
       try {
         const text = await askMuse(state.room)
-        saveMessage(key, text, true)
+        await saveMessage(key, text, true)
         document.getElementById('msg-list').innerHTML = msgListHTML(key)
       } catch (e) {
         btn.textContent = '出错了，再试一次'
@@ -542,7 +568,7 @@ function render() {
       const input = document.getElementById('book-input')
       const text  = input?.value.trim()
       if (!text) return
-      saveMessage(ROOMS.memory.key, text)
+      await saveMessage(ROOMS.memory.key, text)
       state.bookPage = 1
       render()
     })
@@ -557,7 +583,7 @@ function render() {
       btn.textContent = '回复中…'
       try {
         const reply = await askMuseReply('memory', originalText)
-        saveMessage(ROOMS.memory.key, reply, true)
+        await saveMessage(ROOMS.memory.key, reply, true)
         state.bookPage = 1
         render()
       } catch {
