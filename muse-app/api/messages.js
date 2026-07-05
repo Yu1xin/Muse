@@ -7,7 +7,11 @@ async function redisGet(key) {
   })
   const { result } = await res.json()
   if (!result) return []
-  try { return JSON.parse(result) } catch { return [] }
+  try {
+    const parsed = JSON.parse(result)
+    // Handle legacy double-encoded data (stored as string) vs new single-encoded (array)
+    return Array.isArray(parsed) ? parsed : JSON.parse(parsed)
+  } catch { return [] }
 }
 
 async function redisSet(key, value) {
@@ -17,7 +21,7 @@ async function redisSet(key, value) {
       Authorization: `Bearer ${TOKEN}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify(JSON.stringify(value)),
+    body: JSON.stringify(value),
   })
 }
 
