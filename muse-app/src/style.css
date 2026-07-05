@@ -81,16 +81,16 @@ body {
 
 .scene-cards {
   display: flex;
-  gap: 10px;
-  padding: 0 16px;
+  justify-content: center;
+  gap: 40px;
+  padding: 0 24px;
 }
 
 .scene-card {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   background: none;
   border: none;
   cursor: pointer;
@@ -98,40 +98,20 @@ body {
 }
 
 .scene-thumb {
-  width: 100%;
-  aspect-ratio: 2/3;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  transition: border-color 0.2s;
-  position: relative;
-  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: transform 0.15s;
 }
 
-.scene-card:active .scene-thumb { border-color: var(--accent); }
-
-.living-thumb {
-  background:
-    radial-gradient(ellipse at 50% 70%, #c8a82820 0%, transparent 60%),
-    linear-gradient(180deg, #110818 0%, #200e1c 100%);
+.scene-card:active .scene-thumb {
+  transform: scale(0.88);
 }
 
-.bedroom-thumb {
-  background:
-    radial-gradient(ellipse at 80% 55%, #ffe8a018 0%, transparent 60%),
-    linear-gradient(180deg, #07081a 0%, #0f0c22 100%);
-}
-
-.memory-thumb {
-  background: linear-gradient(160deg, #1a1208 0%, #0e0b06 100%);
-}
-
-.book-cover-icon { font-size: 36px; opacity: 0.8; }
+.book-cover-icon { font-size: 40px; }
 
 .scene-label {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted);
   letter-spacing: 2px;
 }

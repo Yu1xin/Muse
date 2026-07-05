@@ -498,7 +498,7 @@ function render() {
     document.getElementById('modal-back').addEventListener('click', closeModal)
 
     // Save message
-    document.getElementById('add-btn').addEventListener('click', () => {
+    document.getElementById('add-btn').addEventListener('click', async () => {
       const input = document.getElementById('msg-input')
       const text  = input.value.trim()
       if (!text) return
@@ -564,7 +564,7 @@ function render() {
 
     document.getElementById('back-btn').addEventListener('click', () => go('home'))
 
-    document.getElementById('book-save')?.addEventListener('click', () => {
+    document.getElementById('book-save')?.addEventListener('click', async () => {
       const input = document.getElementById('book-input')
       const text  = input?.value.trim()
       if (!text) return
