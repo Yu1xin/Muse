@@ -421,11 +421,11 @@ function renderScene(roomId) {
 }
 
 function renderBook() {
-  const msgs  = getMessages(ROOMS.memory.key)
-  const total = msgs.length
+  const threads = groupThreads(getMessages(ROOMS.memory.key))
+  const total = threads.length
   const pg    = state.bookPage
   const isWrite = pg === 0
-  const msg   = msgs[pg - 1] || null
+  const thread = threads[pg - 1] || null
 
   return `
     <div class="room-page">
@@ -445,14 +445,30 @@ function renderBook() {
               ${isWrite ? `
                 <div class="write-page">
                   <textarea id="book-input" placeholder="在这里写下今天的故事…" maxlength="400"></textarea>
-                  <button class="book-save-btn" id="book-save">写好了 ✦</button>
+                  <div class="book-write-actions">
+                    <button class="book-save-btn" id="book-save">写好了 ✦</button>
+                    <button class="book-muse-btn" id="book-muse">让缪时写一页</button>
+                  </div>
                 </div>` : `
                 <div class="read-page">
-                  ${msg.fromMuse ? '<span class="muse-tag book-muse-tag">✦ 缪时</span>' : ''}
-                  <p class="book-text">${esc(msg.text)}</p>
+                  <div class="book-thread" data-thread="${thread.threadId}">
+                    ${thread.msgs.map(m => `
+                      <div class="book-bubble ${m.fromMuse ? 'book-bubble-muse' : 'book-bubble-user'}">
+                        ${m.fromMuse ? '<span class="muse-tag book-muse-tag">✦ 缪时</span>' : ''}
+                        <p class="book-text">${esc(m.text)}</p>
+                        <span class="book-time">${m.time}</span>
+                      </div>`).join('')}
+                  </div>
                   <div class="book-page-footer">
-                    <span class="book-time">${msg.time}</span>
-                    ${!msg.fromMuse ? `<button class="reply-btn book-reply-btn" id="book-reply-btn" data-thread="${String(msg.threadId || msg.id)}">缪时回复</button>` : ''}
+                    <button class="book-reply-btn t-muse-btn" data-thread="${thread.threadId}">缪时来说</button>
+                    <button class="book-reply-btn t-user-btn" data-thread="${thread.threadId}">我来说</button>
+                  </div>
+                  <div class="thread-inline book-inline" id="ir-${thread.threadId}" hidden>
+                    <textarea class="inline-input" placeholder="接着写…" rows="3"></textarea>
+                    <div class="inline-row">
+                      <button class="t-cancel-btn" data-thread="${thread.threadId}">取消</button>
+                      <button class="t-send-btn" data-thread="${thread.threadId}">发送</button>
+                    </div>
                   </div>
                 </div>`}
             </div>
@@ -643,25 +659,71 @@ function render() {
       render()
     })
 
-    document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older'))
-    document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer'))
-
-    document.getElementById('book-reply-btn')?.addEventListener('click', async (e) => {
-      const btn = e.currentTarget
-      const tid = btn.dataset.thread
-      const threadMsgs = getMessages(ROOMS.memory.key)
-        .filter(m => String(m.threadId || m.id) === tid)
-        .sort((a, b) => a.id - b.id)
+    document.getElementById('book-muse')?.addEventListener('click', async () => {
+      const btn = document.getElementById('book-muse')
       btn.disabled = true
-      btn.textContent = '回复中…'
+      btn.textContent = '缪时正在想…'
       try {
-        const reply = await askMuseReply('memory', threadMsgs)
-        await saveMessage(ROOMS.memory.key, reply, true, Number(tid))
+        const text = await askMuse('memory')
+        await saveMessage(ROOMS.memory.key, text, true)
         state.bookPage = 1
         render()
       } catch {
-        btn.disabled = false
-        btn.textContent = '缪时回复'
+        btn.textContent = '出错了，再试一次'
+        setTimeout(() => { btn.disabled = false; btn.textContent = '让缪时写一页' }, 2000)
+      }
+    })
+
+    document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older'))
+    document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer'))
+
+    document.getElementById('page-body')?.addEventListener('click', async (e) => {
+      const key = ROOMS.memory.key
+      const museBtn = e.target.closest('.t-muse-btn')
+      if (museBtn) {
+        const tid = museBtn.dataset.thread
+        const threadMsgs = getMessages(key)
+          .filter(m => String(m.threadId || m.id) === tid)
+          .sort((a, b) => a.id - b.id)
+        museBtn.disabled = true
+        museBtn.textContent = '想中…'
+        try {
+          const reply = await askMuseReply('memory', threadMsgs)
+          await saveMessage(key, reply, true, Number(tid))
+          state.bookPage = 1
+          render()
+        } catch {
+          museBtn.disabled = false
+          museBtn.textContent = '缪时来说'
+        }
+        return
+      }
+
+      const userBtn = e.target.closest('.t-user-btn')
+      if (userBtn) {
+        const tid = userBtn.dataset.thread
+        const el = document.getElementById(`ir-${tid}`)
+        if (el) { el.hidden = !el.hidden; if (!el.hidden) el.querySelector('.inline-input')?.focus() }
+        return
+      }
+
+      const cancelBtn = e.target.closest('.t-cancel-btn')
+      if (cancelBtn) {
+        const el = document.getElementById(`ir-${cancelBtn.dataset.thread}`)
+        if (el) el.hidden = true
+        return
+      }
+
+      const sendBtn = e.target.closest('.t-send-btn')
+      if (sendBtn) {
+        const tid = sendBtn.dataset.thread
+        const el = document.getElementById(`ir-${tid}`)
+        const text = el?.querySelector('.inline-input')?.value.trim()
+        if (!text) return
+        sendBtn.disabled = true
+        await saveMessage(key, text, false, Number(tid))
+        state.bookPage = 1
+        render()
       }
     })
   }

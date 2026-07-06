@@ -566,13 +566,13 @@ textarea::placeholder { color: var(--text-muted); }
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 28px 16px 48px;
+  padding: 32px 16px 56px;
   background: radial-gradient(ellipse at center, #1a1208 0%, #0e0a05 100%);
 }
 
 .book-wrap {
   width: 100%;
-  max-width: 360px;
+  max-width: 520px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -587,7 +587,7 @@ textarea::placeholder { color: var(--text-muted); }
     inset -3px 0 6px rgba(0,0,0,0.08);
   overflow: hidden;
   position: relative;
-  min-height: 400px;
+  min-height: 560px;
   display: flex;
   flex-direction: column;
 }
@@ -632,7 +632,7 @@ textarea::placeholder { color: var(--text-muted); }
 
 /* Write page */
 .write-page {
-  padding: 16px 18px 20px 28px;
+  padding: 20px 22px 24px 34px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -655,13 +655,19 @@ textarea::placeholder { color: var(--text-muted); }
   line-height: 2em;
   padding: 0;
   resize: none;
-  min-height: 280px;
+  min-height: 410px;
   outline: none;
 }
 
 .write-page textarea::placeholder { color: #b8a898; }
 
-.book-save-btn {
+.book-write-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.book-save-btn,
+.book-muse-btn {
   background: linear-gradient(135deg, #6a2818, #3a0c38);
   border: none;
   border-radius: 6px;
@@ -672,19 +678,29 @@ textarea::placeholder { color: var(--text-muted); }
   cursor: pointer;
   letter-spacing: 2px;
   font-family: inherit;
-  width: 100%;
+  flex: 1;
   transition: opacity 0.15s;
 }
 
-.book-save-btn:active { opacity: 0.8; }
+.book-muse-btn {
+  background: linear-gradient(135deg, #4e2348, #261642);
+  border: 1px solid #8a5080;
+  color: #f0d8f0;
+  font-size: 13px;
+}
+
+.book-save-btn:active,
+.book-muse-btn:active { opacity: 0.8; }
+
+.book-muse-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* Read page */
 .read-page {
-  padding: 20px 18px 24px 28px;
-  min-height: 340px;
+  padding: 22px 22px 26px 34px;
+  min-height: 500px;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 14px;
   background:
     repeating-linear-gradient(
       transparent 0,
@@ -696,13 +712,40 @@ textarea::placeholder { color: var(--text-muted); }
   background-color: #f5f0e6;
 }
 
+.book-thread {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.book-bubble {
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: 88%;
+  padding: 10px 12px;
+}
+
+.book-bubble-user {
+  align-self: flex-end;
+  background: rgba(138, 80, 44, 0.12);
+  border: 1px solid rgba(122, 80, 48, 0.22);
+}
+
+.book-bubble-muse {
+  align-self: flex-start;
+  background: rgba(90, 42, 108, 0.12);
+  border: 1px solid rgba(90, 42, 108, 0.22);
+}
+
 .book-text {
   color: #2a1810;
   font-size: 15px;
   font-family: 'PingFang SC', serif;
   line-height: 2em;
   word-break: break-word;
-  flex: 1;
 }
 
 .book-muse-tag {
@@ -713,8 +756,8 @@ textarea::placeholder { color: var(--text-muted); }
 .book-page-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 16px;
+  justify-content: flex-end;
+  margin-top: auto;
   gap: 8px;
 }
 
@@ -723,14 +766,43 @@ textarea::placeholder { color: var(--text-muted); }
   color: #8a7060;
   letter-spacing: 0.5px;
   font-family: serif;
+  align-self: flex-end;
 }
 
 .book-reply-btn {
+  background: rgba(245, 240, 230, 0.6);
+  border: 1px solid #c0a080;
+  border-radius: 20px;
   border-color: #c0a080;
   color: #8a6040;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 6px 14px;
+  white-space: nowrap;
 }
 
 .book-reply-btn:hover { background: #f0e8d8; color: #6a4020; }
+.book-reply-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.book-inline {
+  background: rgba(255, 255, 255, 0.32);
+  border: 1px solid rgba(192, 160, 128, 0.42);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.book-inline .inline-input {
+  background: rgba(255, 252, 246, 0.72);
+  border-color: #d0b898;
+  color: #2c1a10;
+}
+
+.book-inline .t-cancel-btn {
+  border-color: #d0b898;
+  color: #8a7060;
+}
 
 /* Book nav */
 .book-nav {
