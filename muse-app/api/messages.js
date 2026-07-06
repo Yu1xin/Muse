@@ -35,13 +35,15 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { text, fromMuse = false } = req.body
+    const { text, fromMuse = false, threadId = null } = req.body
     if (!text) return res.status(400).json({ error: 'text required' })
     const messages = await redisGet(room)
+    const id = Date.now()
     const newMsg = {
-      id: Date.now(),
+      id,
       text,
       fromMuse,
+      threadId: threadId || id,
       time: new Date().toLocaleString('zh-CN', {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit',

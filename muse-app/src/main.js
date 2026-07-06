@@ -28,23 +28,25 @@ function getMessages(key) {
   return msgCache[key] || []
 }
 
-async function saveMessage(key, text, fromMuse = false) {
+async function saveMessage(key, text, fromMuse = false, threadId = null) {
   if (!USE_API) {
+    const id = Date.now()
     const msgs = getMessages(key)
-    const m = { id: Date.now(), text, fromMuse, time: new Date().toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }
+    const m = { id, text, fromMuse, threadId: threadId || id, time: new Date().toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }
     msgs.unshift(m)
     msgCache[key] = msgs
     localStorage.setItem(key, JSON.stringify(msgs))
-    return
+    return m
   }
   const res = await fetch(`/api/messages?room=${key}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, fromMuse }),
+    body: JSON.stringify({ text, fromMuse, threadId }),
   })
   const newMsg = await res.json()
   if (!msgCache[key]) msgCache[key] = []
   msgCache[key].unshift(newMsg)
+  return newMsg
 }
 
 function esc(t) {
@@ -113,18 +115,23 @@ async function askMuse(roomId) {
   return data.content[0].text.trim()
 }
 
-async function askMuseReply(roomId, originalText) {
+async function askMuseReply(roomId, threadMsgs) {
+  const messages = threadMsgs.map(m => ({
+    role: m.fromMuse ? 'assistant' : 'user',
+    content: m.text,
+  }))
+  // Claude API requires the last message to be from the user
+  if (messages.at(-1)?.role === 'assistant') {
+    messages.push({ role: 'user', content: '嗯' })
+  }
   const res = await fetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 200,
-      system: MUSE_PERSONA,
-      messages: [{
-        role: 'user',
-        content: `现在在${ROOM_CONTEXT[roomId]}。她写道："${originalText}"。回复她。`,
-      }],
+      system: MUSE_PERSONA + `\n\n现在在${ROOM_CONTEXT[roomId]}。`,
+      messages,
     }),
   })
   if (!res.ok) throw new Error(`API ${res.status}`)
@@ -309,18 +316,42 @@ function svgBedroom() {
 
 // ── Render helpers ───────────────────────────────────────────────────────────
 
+function groupThreads(msgs) {
+  const map = new Map()
+  const order = []
+  for (const msg of msgs) {
+    const tid = String(msg.threadId || msg.id)
+    if (!map.has(tid)) { map.set(tid, []); order.push(tid) }
+    map.get(tid).push(msg)
+  }
+  return order.map(tid => ({ threadId: tid, msgs: map.get(tid).reverse() }))
+}
+
 function msgListHTML(key) {
   const msgs = getMessages(key)
   if (!msgs.length) return '<p class="empty">还没有留言，来写第一条吧</p>'
-  return msgs.map(m => `
-    <div class="message-item ${m.fromMuse ? 'from-muse' : ''}">
-      ${m.fromMuse ? '<span class="muse-tag">✦ 缪时</span>' : ''}
-      <p class="message-text">${esc(m.text)}</p>
-      <div class="message-footer">
-        <span class="message-time">${m.time}</span>
-        ${!m.fromMuse ? `<button class="reply-btn" data-text="${m.text.replace(/"/g,'&quot;')}">缪时回复</button>` : ''}
+
+  return groupThreads(msgs).map(({ threadId, msgs: tMsgs }) =>
+    `<div class="thread-group">
+      ${tMsgs.map(m => `
+        <div class="bubble ${m.fromMuse ? 'bubble-muse' : 'bubble-user'}">
+          ${m.fromMuse ? '<span class="bubble-name">✦ 缪时</span>' : ''}
+          <p class="bubble-text">${esc(m.text)}</p>
+          <span class="bubble-time">${m.time}</span>
+        </div>`).join('')}
+      <div class="thread-actions">
+        <button class="thread-btn t-muse-btn" data-thread="${threadId}">缪时来说</button>
+        <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
       </div>
-    </div>`).join('')
+      <div class="thread-inline" id="ir-${threadId}" hidden>
+        <textarea class="inline-input" placeholder="说点什么…" rows="2"></textarea>
+        <div class="inline-row">
+          <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
+          <button class="t-send-btn" data-thread="${threadId}">发送</button>
+        </div>
+      </div>
+    </div>`
+  ).join('')
 }
 
 
@@ -413,7 +444,7 @@ function renderBook() {
                   <p class="book-text">${esc(msg.text)}</p>
                   <div class="book-page-footer">
                     <span class="book-time">${msg.time}</span>
-                    ${!msg.fromMuse ? `<button class="reply-btn book-reply-btn" id="book-reply-btn" data-text="${msg.text.replace(/"/g,'&quot;')}">缪时回复</button>` : ''}
+                    ${!msg.fromMuse ? `<button class="reply-btn book-reply-btn" id="book-reply-btn" data-thread="${String(msg.threadId || msg.id)}">缪时回复</button>` : ''}
                   </div>
                 </div>`}
             </div>
@@ -513,20 +544,51 @@ function render() {
       }
     })
 
-    // 缪时回复某条留言（事件委托）
+    // Thread action buttons (event delegation)
     document.getElementById('msg-list').addEventListener('click', async (e) => {
-      const btn = e.target.closest('.reply-btn')
-      if (!btn) return
-      const originalText = btn.dataset.text
-      btn.disabled = true
-      btn.textContent = '回复中…'
-      try {
-        const reply = await askMuseReply(state.room, originalText)
-        await saveMessage(key, reply, true)
+      const museBtn = e.target.closest('.t-muse-btn')
+      if (museBtn) {
+        const tid = museBtn.dataset.thread
+        const threadMsgs = getMessages(key)
+          .filter(m => String(m.threadId || m.id) === tid)
+          .sort((a, b) => a.id - b.id)
+        museBtn.disabled = true
+        museBtn.textContent = '想中…'
+        try {
+          const reply = await askMuseReply(state.room, threadMsgs)
+          await saveMessage(key, reply, true, Number(tid))
+          document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        } catch {
+          museBtn.disabled = false
+          museBtn.textContent = '缪时来说'
+        }
+        return
+      }
+
+      const userBtn = e.target.closest('.t-user-btn')
+      if (userBtn) {
+        const tid = userBtn.dataset.thread
+        const el = document.getElementById(`ir-${tid}`)
+        if (el) { el.hidden = !el.hidden; if (!el.hidden) el.querySelector('.inline-input')?.focus() }
+        return
+      }
+
+      const cancelBtn = e.target.closest('.t-cancel-btn')
+      if (cancelBtn) {
+        const el = document.getElementById(`ir-${cancelBtn.dataset.thread}`)
+        if (el) el.hidden = true
+        return
+      }
+
+      const sendBtn = e.target.closest('.t-send-btn')
+      if (sendBtn) {
+        const tid = sendBtn.dataset.thread
+        const el = document.getElementById(`ir-${tid}`)
+        const text = el?.querySelector('.inline-input')?.value.trim()
+        if (!text) return
+        sendBtn.disabled = true
+        await saveMessage(key, text, false, Number(tid))
         document.getElementById('msg-list').innerHTML = msgListHTML(key)
-      } catch {
-        btn.disabled = false
-        btn.textContent = '缪时回复'
       }
     })
 
@@ -578,12 +640,15 @@ function render() {
 
     document.getElementById('book-reply-btn')?.addEventListener('click', async (e) => {
       const btn = e.currentTarget
-      const originalText = btn.dataset.text
+      const tid = btn.dataset.thread
+      const threadMsgs = getMessages(ROOMS.memory.key)
+        .filter(m => String(m.threadId || m.id) === tid)
+        .sort((a, b) => a.id - b.id)
       btn.disabled = true
       btn.textContent = '回复中…'
       try {
-        const reply = await askMuseReply('memory', originalText)
-        await saveMessage(ROOMS.memory.key, reply, true)
+        const reply = await askMuseReply('memory', threadMsgs)
+        await saveMessage(ROOMS.memory.key, reply, true, Number(tid))
         state.bookPage = 1
         render()
       } catch {

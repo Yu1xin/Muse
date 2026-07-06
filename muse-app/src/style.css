@@ -409,6 +409,125 @@ textarea::placeholder { color: var(--text-muted); }
 .reply-btn:active { opacity: 0.7; }
 .reply-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* ── Thread groups ── */
+.thread-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  max-width: 90%;
+}
+
+.bubble-user {
+  background: rgba(139, 26, 74, 0.18);
+  border: 1px solid rgba(139, 26, 74, 0.28);
+  align-self: flex-end;
+}
+
+.bubble-muse {
+  background: rgba(74, 26, 110, 0.22);
+  border: 1px solid rgba(74, 26, 110, 0.38);
+  align-self: flex-start;
+}
+
+.bubble-name {
+  font-size: 11px;
+  color: #c8a0e8;
+  letter-spacing: 1px;
+}
+
+.bubble-text {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.bubble-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  align-self: flex-end;
+}
+
+.thread-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+
+.thread-btn {
+  background: none;
+  border: 1px solid #3a2050;
+  border-radius: 20px;
+  color: #9a70c0;
+  font-size: 11px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0.5px;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.thread-btn:active   { opacity: 0.7; }
+.thread-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.thread-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.thread-inline .inline-input {
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  min-height: unset;
+}
+
+.inline-row {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.t-cancel-btn, .t-send-btn {
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.t-cancel-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.t-send-btn {
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+
 /* ── Room page (book) ── */
 .room-page {
   display: flex;
