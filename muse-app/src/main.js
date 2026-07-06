@@ -7,14 +7,22 @@ const ROOMS = {
 }
 
 // 生产环境用 API，本地开发用 localStorage
-const USE_API = window.location.hostname !== 'localhost'
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+const USE_API = !LOCAL_HOSTS.has(window.location.hostname)
 
 // 内存缓存，避免重复请求
 const msgCache = {}
 
 async function loadMessages(key) {
   if (!USE_API) {
-    try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] }
+    try {
+      const messages = JSON.parse(localStorage.getItem(key) || '[]')
+      msgCache[key] = Array.isArray(messages) ? messages : []
+      return msgCache[key]
+    } catch {
+      msgCache[key] = []
+      return []
+    }
   }
   try {
     const res = await fetch(`/api/messages?room=${key}`)
