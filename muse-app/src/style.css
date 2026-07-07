@@ -454,11 +454,34 @@ textarea::placeholder { color: var(--text-muted); }
   word-break: break-word;
 }
 
+.bubble-meta,
+.book-bubble-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .bubble-time {
   font-size: 11px;
   color: var(--text-muted);
-  align-self: flex-end;
 }
+
+.delete-msg-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 0;
+  transition: color 0.15s, opacity 0.15s;
+}
+
+.delete-msg-btn:hover { color: var(--accent-light); }
+.delete-msg-btn:active { opacity: 0.65; }
+.delete-msg-btn:disabled { cursor: not-allowed; opacity: 0.35; }
 
 .thread-actions {
   display: flex;
@@ -766,7 +789,14 @@ textarea::placeholder { color: var(--text-muted); }
   color: #8a7060;
   letter-spacing: 0.5px;
   font-family: serif;
-  align-self: flex-end;
+}
+
+.book-delete-btn {
+  color: #9a8070;
+}
+
+.book-delete-btn:hover {
+  color: #8a6040;
 }
 
 .book-reply-btn {

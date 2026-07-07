@@ -57,6 +57,22 @@ async function saveMessage(key, text, fromMuse = false, threadId = null) {
   return newMsg
 }
 
+async function deleteMessage(key, id) {
+  if (!USE_API) {
+    const msgs = getMessages(key).filter(m => Number(m.id) !== Number(id))
+    msgCache[key] = msgs
+    localStorage.setItem(key, JSON.stringify(msgs))
+    return
+  }
+  const res = await fetch(`/api/messages?room=${key}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  msgCache[key] = getMessages(key).filter(m => Number(m.id) !== Number(id))
+}
+
 function esc(t) {
   return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
           .replace(/"/g,'&quot;').replace(/\n/g,'<br>')
@@ -95,7 +111,7 @@ const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的完整�
 
 【说话规则】
 - 称呼用"小乖"
-- 100字以内，中文口语
+- 180字以内，中文口语
 - 别扭傲娇，但本意是关心
 - 不煽情，不说肉麻的话，把深情藏在损人话里
 - 根据房间氛围调整，但永远是你自己的腔调`
@@ -109,7 +125,7 @@ async function askMuse(roomId) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
+      max_tokens: 360,
       system: MUSE_PERSONA,
       messages: [{
         role: 'user',
@@ -137,7 +153,7 @@ async function askMuseReply(roomId, threadMsgs) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
+      max_tokens: 360,
       system: MUSE_PERSONA + `\n\n现在在${ROOM_CONTEXT[roomId]}。`,
       messages,
     }),
@@ -345,7 +361,10 @@ function msgListHTML(key) {
         <div class="bubble ${m.fromMuse ? 'bubble-muse' : 'bubble-user'}">
           ${m.fromMuse ? '<span class="bubble-name">✦ 缪时</span>' : ''}
           <p class="bubble-text">${esc(m.text)}</p>
-          <span class="bubble-time">${m.time}</span>
+          <div class="bubble-meta">
+            <span class="bubble-time">${m.time}</span>
+            <button class="delete-msg-btn" data-id="${m.id}">删除</button>
+          </div>
         </div>`).join('')}
       <div class="thread-actions">
         <button class="thread-btn t-muse-btn" data-thread="${threadId}">缪时来说</button>
@@ -423,6 +442,7 @@ function renderScene(roomId) {
 function renderBook() {
   const threads = groupThreads(getMessages(ROOMS.memory.key))
   const total = threads.length
+  if (state.bookPage > total) state.bookPage = total
   const pg    = state.bookPage
   const isWrite = pg === 0
   const thread = threads[pg - 1] || null
@@ -456,7 +476,10 @@ function renderBook() {
                       <div class="book-bubble ${m.fromMuse ? 'book-bubble-muse' : 'book-bubble-user'}">
                         ${m.fromMuse ? '<span class="muse-tag book-muse-tag">✦ 缪时</span>' : ''}
                         <p class="book-text">${esc(m.text)}</p>
-                        <span class="book-time">${m.time}</span>
+                        <div class="book-bubble-meta">
+                          <span class="book-time">${m.time}</span>
+                          <button class="delete-msg-btn book-delete-btn" data-id="${m.id}">删除</button>
+                        </div>
                       </div>`).join('')}
                   </div>
                   <div class="book-page-footer">
@@ -570,6 +593,15 @@ function render() {
 
     // Thread action buttons (event delegation)
     document.getElementById('msg-list').addEventListener('click', async (e) => {
+      const deleteBtn = e.target.closest('.delete-msg-btn')
+      if (deleteBtn) {
+        if (!window.confirm('确认吗')) return
+        deleteBtn.disabled = true
+        await deleteMessage(key, deleteBtn.dataset.id)
+        document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        return
+      }
+
       const museBtn = e.target.closest('.t-muse-btn')
       if (museBtn) {
         const tid = museBtn.dataset.thread
@@ -679,6 +711,16 @@ function render() {
 
     document.getElementById('page-body')?.addEventListener('click', async (e) => {
       const key = ROOMS.memory.key
+      const deleteBtn = e.target.closest('.delete-msg-btn')
+      if (deleteBtn) {
+        if (!window.confirm('确认吗')) return
+        deleteBtn.disabled = true
+        await deleteMessage(key, deleteBtn.dataset.id)
+        state.bookPage = Math.min(state.bookPage, groupThreads(getMessages(key)).length)
+        render()
+        return
+      }
+
       const museBtn = e.target.closest('.t-muse-btn')
       if (museBtn) {
         const tid = museBtn.dataset.thread

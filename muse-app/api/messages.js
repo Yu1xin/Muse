@@ -54,5 +54,14 @@ export default async function handler(req, res) {
     return res.json(newMsg)
   }
 
+  if (req.method === 'DELETE') {
+    const id = Number(req.body?.id ?? req.query.id)
+    if (!id) return res.status(400).json({ error: 'id required' })
+    const messages = await redisGet(room)
+    const nextMessages = messages.filter(message => Number(message.id) !== id)
+    await redisSet(room, nextMessages)
+    return res.json({ ok: true })
+  }
+
   res.status(405).end()
 }
