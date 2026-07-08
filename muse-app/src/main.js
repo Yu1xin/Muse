@@ -549,6 +549,16 @@ function closeModal() {
   document.getElementById('modal-back')?.classList.remove('open')
 }
 
+function sendOnReturn(input, send) {
+  if (!input || input.dataset.returnSends === 'true') return
+  input.dataset.returnSends = 'true'
+  input?.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.shiftKey) return
+    e.preventDefault()
+    send()
+  })
+}
+
 // ── Main render ───────────────────────────────────────────────────────────────
 
 function render() {
@@ -585,11 +595,7 @@ function render() {
       document.getElementById('msg-list').innerHTML = msgListHTML(key)
     })
 
-    document.getElementById('msg-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        document.getElementById('add-btn').click()
-      }
-    })
+    sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('add-btn').click())
 
     // Thread action buttons (event delegation)
     document.getElementById('msg-list').addEventListener('click', async (e) => {
@@ -625,7 +631,14 @@ function render() {
       if (userBtn) {
         const tid = userBtn.dataset.thread
         const el = document.getElementById(`ir-${tid}`)
-        if (el) { el.hidden = !el.hidden; if (!el.hidden) el.querySelector('.inline-input')?.focus() }
+        if (el) {
+          el.hidden = !el.hidden
+          if (!el.hidden) {
+            const input = el.querySelector('.inline-input')
+            sendOnReturn(input, () => el.querySelector('.t-send-btn')?.click())
+            input?.focus()
+          }
+        }
         return
       }
 
@@ -691,6 +704,8 @@ function render() {
       render()
     })
 
+    sendOnReturn(document.getElementById('book-input'), () => document.getElementById('book-save')?.click())
+
     document.getElementById('book-muse')?.addEventListener('click', async () => {
       const btn = document.getElementById('book-muse')
       btn.disabled = true
@@ -745,7 +760,14 @@ function render() {
       if (userBtn) {
         const tid = userBtn.dataset.thread
         const el = document.getElementById(`ir-${tid}`)
-        if (el) { el.hidden = !el.hidden; if (!el.hidden) el.querySelector('.inline-input')?.focus() }
+        if (el) {
+          el.hidden = !el.hidden
+          if (!el.hidden) {
+            const input = el.querySelector('.inline-input')
+            sendOnReturn(input, () => el.querySelector('.t-send-btn')?.click())
+            input?.focus()
+          }
+        }
         return
       }
 
