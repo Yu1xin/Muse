@@ -553,8 +553,9 @@ function sendOnReturn(input, send) {
   if (!input || input.dataset.returnSends === 'true') return
   input.dataset.returnSends = 'true'
   let composing = false
+  let allowLineBreak = false
   const submit = e => {
-    if (e.shiftKey || composing || e.isComposing) return
+    if (composing || e.isComposing) return
     e.preventDefault()
     send()
   }
@@ -562,11 +563,25 @@ function sendOnReturn(input, send) {
   input.addEventListener('compositionend', () => { composing = false })
   input?.addEventListener('keydown', e => {
     if (e.key !== 'Enter' && e.key !== 'NumpadEnter') return
+    if (e.shiftKey) {
+      allowLineBreak = true
+      return
+    }
     submit(e)
   })
   input.addEventListener('beforeinput', e => {
     if (e.inputType !== 'insertLineBreak') return
+    if (allowLineBreak) return
     submit(e)
+  })
+  input.addEventListener('input', () => {
+    if (composing || !/\n$/.test(input.value)) return
+    if (allowLineBreak) {
+      allowLineBreak = false
+      return
+    }
+    input.value = input.value.replace(/\n+$/, '')
+    send()
   })
 }
 
