@@ -86,6 +86,21 @@ const ROOM_CONTEXT = {
   memory:  '回忆录——记下来的那些时刻',
 }
 
+const ROOM_REPLY_CONFIG = {
+  living: {
+    maxTokens: 720,
+    extraSystem: '客厅里的回复可以更展开一些，约260到340字。先接住小乖刚才说的话，再用缪时的毒舌和护短回应她；不要只回一句，也不要写成心理咨询师。',
+  },
+  bedroom: {
+    maxTokens: 360,
+    extraSystem: '',
+  },
+  memory: {
+    maxTokens: 420,
+    extraSystem: '回忆录里可以稍微完整一点，但仍保持像在一页纸上写给她的话。',
+  },
+}
+
 const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的完整人设，请严格遵守：
 
 【身份与能力】
@@ -119,14 +134,15 @@ const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的完整�
 async function askMuse(roomId) {
   const msgs = getMessages(ROOMS[roomId].key)
   const recent = msgs.slice(0, 3).map(m => `"${m.text}"`).join('；')
+  const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
 
   const res = await fetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 360,
-      system: MUSE_PERSONA,
+      max_tokens: config.maxTokens,
+      system: [MUSE_PERSONA, config.extraSystem].filter(Boolean).join('\n\n'),
       messages: [{
         role: 'user',
         content: `现在在${ROOM_CONTEXT[roomId]}。${recent ? `她最近写道：${recent}。` : ''}随便留一条话。`,
@@ -140,6 +156,7 @@ async function askMuse(roomId) {
 }
 
 async function askMuseReply(roomId, threadMsgs) {
+  const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
   const messages = threadMsgs.map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
     content: m.text,
@@ -153,8 +170,8 @@ async function askMuseReply(roomId, threadMsgs) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 360,
-      system: MUSE_PERSONA + `\n\n现在在${ROOM_CONTEXT[roomId]}。`,
+      max_tokens: config.maxTokens,
+      system: [MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem].filter(Boolean).join('\n\n'),
       messages,
     }),
   })
