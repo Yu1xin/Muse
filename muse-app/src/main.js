@@ -552,11 +552,30 @@ function closeModal() {
 function sendOnReturn(input, send) {
   if (!input || input.dataset.returnSends === 'true') return
   input.dataset.returnSends = 'true'
-  input?.addEventListener('keydown', e => {
-    if (e.key !== 'Enter' || e.shiftKey) return
+  let composing = false
+  const submit = e => {
+    if (e.shiftKey || composing || e.isComposing) return
     e.preventDefault()
     send()
+  }
+  input.addEventListener('compositionstart', () => { composing = true })
+  input.addEventListener('compositionend', () => { composing = false })
+  input?.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== 'NumpadEnter') return
+    submit(e)
   })
+  input.addEventListener('beforeinput', e => {
+    if (e.inputType !== 'insertLineBreak') return
+    submit(e)
+  })
+}
+
+async function autoReplyInLiving(key, threadId) {
+  const threadMsgs = getMessages(key)
+    .filter(m => String(m.threadId || m.id) === String(threadId))
+    .sort((a, b) => a.id - b.id)
+  const reply = await askMuseReply('living', threadMsgs)
+  await saveMessage(key, reply, true, Number(threadId))
 }
 
 // ── Main render ───────────────────────────────────────────────────────────────
@@ -587,12 +606,21 @@ function render() {
 
     // Save message
     document.getElementById('add-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('add-btn')
       const input = document.getElementById('msg-input')
       const text  = input.value.trim()
       if (!text) return
-      await saveMessage(key, text)
+      btn.disabled = true
+      const message = await saveMessage(key, text)
       input.value = ''
       document.getElementById('msg-list').innerHTML = msgListHTML(key)
+      if (state.room === 'living') {
+        try {
+          await autoReplyInLiving(key, message.threadId || message.id)
+          document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        } catch {}
+      }
+      btn.disabled = false
     })
 
     sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('add-btn').click())
@@ -658,6 +686,12 @@ function render() {
         sendBtn.disabled = true
         await saveMessage(key, text, false, Number(tid))
         document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        if (state.room === 'living') {
+          try {
+            await autoReplyInLiving(key, tid)
+            document.getElementById('msg-list').innerHTML = msgListHTML(key)
+          } catch {}
+        }
       }
     })
 
