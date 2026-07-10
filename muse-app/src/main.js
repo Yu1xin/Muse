@@ -388,7 +388,7 @@ function msgListHTML(key) {
         <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
       </div>
       <div class="thread-inline" id="ir-${threadId}" hidden>
-        <textarea class="inline-input" placeholder="说点什么…" rows="2"></textarea>
+        <textarea class="inline-input" placeholder="说点什么…" rows="2" enterkeyhint="send"></textarea>
         <div class="inline-row">
           <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
           <button class="t-send-btn" data-thread="${threadId}">发送</button>
@@ -446,7 +446,7 @@ function renderScene(roomId) {
       <div class="msg-modal" id="msg-modal">
         <div class="msg-handle"></div>
         <form class="msg-form" id="msg-form">
-          <textarea id="msg-input" placeholder="写点什么…" rows="3"></textarea>
+          <textarea id="msg-input" placeholder="写点什么…" rows="3" enterkeyhint="send"></textarea>
           <div class="btn-row">
             <button class="add-btn" id="add-btn" type="submit">添加留言</button>
             <button class="muse-btn" id="muse-btn" type="button">✦ 让缪时写一条</button>
@@ -483,7 +483,7 @@ function renderBook() {
             <div class="page-body" id="page-body">
               ${isWrite ? `
                 <div class="write-page">
-                  <textarea id="book-input" placeholder="在这里写下今天的故事…" maxlength="400"></textarea>
+                  <textarea id="book-input" placeholder="在这里写下今天的故事…" maxlength="400" enterkeyhint="send"></textarea>
                   <div class="book-write-actions">
                     <button class="book-save-btn" id="book-save">写好了 ✦</button>
                     <button class="book-muse-btn" id="book-muse">让缪时写一页</button>
@@ -506,7 +506,7 @@ function renderBook() {
                     <button class="book-reply-btn t-user-btn" data-thread="${thread.threadId}">我来说</button>
                   </div>
                   <div class="thread-inline book-inline" id="ir-${thread.threadId}" hidden>
-                    <textarea class="inline-input" placeholder="接着写…" rows="3"></textarea>
+                    <textarea class="inline-input" placeholder="接着写…" rows="3" enterkeyhint="send"></textarea>
                     <div class="inline-row">
                       <button class="t-cancel-btn" data-thread="${thread.threadId}">取消</button>
                       <button class="t-send-btn" data-thread="${thread.threadId}">发送</button>
@@ -572,12 +572,34 @@ function sendOnReturn(input, send) {
   if (!input || input.dataset.returnSends === 'true') return
   input.dataset.returnSends = 'true'
   let composing = false
+  let allowLineBreak = false
+  const submit = e => {
+    if (composing || e.isComposing) return
+    e.preventDefault()
+    send()
+  }
   input.addEventListener('compositionstart', () => { composing = true })
   input.addEventListener('compositionend', () => { composing = false })
   input.addEventListener('keydown', e => {
     if (e.key !== 'Enter' && e.key !== 'NumpadEnter') return
-    if (!(e.metaKey || e.ctrlKey) || composing || e.isComposing) return
-    e.preventDefault()
+    if (e.shiftKey) {
+      allowLineBreak = true
+      return
+    }
+    submit(e)
+  })
+  input.addEventListener('beforeinput', e => {
+    if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return
+    if (allowLineBreak) return
+    submit(e)
+  })
+  input.addEventListener('input', () => {
+    if (composing || !/\n$/.test(input.value)) return
+    if (allowLineBreak) {
+      allowLineBreak = false
+      return
+    }
+    input.value = input.value.replace(/\n+$/, '')
     send()
   })
 }
