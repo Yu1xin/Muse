@@ -371,7 +371,7 @@ function msgListHTML(key) {
         <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
       </div>
       <div class="thread-inline" id="ir-${threadId}" hidden>
-        <input class="inline-input" type="text" placeholder="说点什么…" autocomplete="off">
+        <textarea class="inline-input" placeholder="说点什么…" rows="2"></textarea>
         <div class="inline-row">
           <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
           <button class="t-send-btn" data-thread="${threadId}">发送</button>
@@ -429,7 +429,7 @@ function renderScene(roomId) {
       <div class="msg-modal" id="msg-modal">
         <div class="msg-handle"></div>
         <form class="msg-form" id="msg-form">
-          <input id="msg-input" type="text" placeholder="写点什么…" autocomplete="off">
+          <textarea id="msg-input" placeholder="写点什么…" rows="3"></textarea>
           <div class="btn-row">
             <button class="add-btn" id="add-btn" type="submit">添加留言</button>
             <button class="muse-btn" id="muse-btn" type="button">✦ 让缪时写一条</button>
@@ -489,7 +489,7 @@ function renderBook() {
                     <button class="book-reply-btn t-user-btn" data-thread="${thread.threadId}">我来说</button>
                   </div>
                   <div class="thread-inline book-inline" id="ir-${thread.threadId}" hidden>
-                    <input class="inline-input" type="text" placeholder="接着写…" autocomplete="off">
+                    <textarea class="inline-input" placeholder="接着写…" rows="3"></textarea>
                     <div class="inline-row">
                       <button class="t-cancel-btn" data-thread="${thread.threadId}">取消</button>
                       <button class="t-send-btn" data-thread="${thread.threadId}">发送</button>
@@ -555,34 +555,12 @@ function sendOnReturn(input, send) {
   if (!input || input.dataset.returnSends === 'true') return
   input.dataset.returnSends = 'true'
   let composing = false
-  let allowLineBreak = false
-  const submit = e => {
-    if (composing || e.isComposing) return
-    e.preventDefault()
-    send()
-  }
   input.addEventListener('compositionstart', () => { composing = true })
   input.addEventListener('compositionend', () => { composing = false })
-  input?.addEventListener('keydown', e => {
+  input.addEventListener('keydown', e => {
     if (e.key !== 'Enter' && e.key !== 'NumpadEnter') return
-    if (e.shiftKey) {
-      allowLineBreak = true
-      return
-    }
-    submit(e)
-  })
-  input.addEventListener('beforeinput', e => {
-    if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return
-    if (allowLineBreak) return
-    submit(e)
-  })
-  input.addEventListener('input', () => {
-    if (composing || !/\n$/.test(input.value)) return
-    if (allowLineBreak) {
-      allowLineBreak = false
-      return
-    }
-    input.value = input.value.replace(/\n+$/, '')
+    if (!(e.metaKey || e.ctrlKey) || composing || e.isComposing) return
+    e.preventDefault()
     send()
   })
 }
