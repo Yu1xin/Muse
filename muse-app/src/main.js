@@ -371,7 +371,7 @@ function msgListHTML(key) {
         <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
       </div>
       <div class="thread-inline" id="ir-${threadId}" hidden>
-        <textarea class="inline-input" placeholder="说点什么…" rows="2"></textarea>
+        <input class="inline-input" type="text" placeholder="说点什么…" autocomplete="off">
         <div class="inline-row">
           <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
           <button class="t-send-btn" data-thread="${threadId}">发送</button>
@@ -428,11 +428,13 @@ function renderScene(roomId) {
       <!-- Slide-up modal -->
       <div class="msg-modal" id="msg-modal">
         <div class="msg-handle"></div>
-        <textarea id="msg-input" placeholder="写点什么…" rows="3"></textarea>
-        <div class="btn-row">
-          <button class="add-btn" id="add-btn">添加留言</button>
-          <button class="muse-btn" id="muse-btn">✦ 让缪时写一条</button>
-        </div>
+        <form class="msg-form" id="msg-form">
+          <input id="msg-input" type="text" placeholder="写点什么…" autocomplete="off">
+          <div class="btn-row">
+            <button class="add-btn" id="add-btn" type="submit">添加留言</button>
+            <button class="muse-btn" id="muse-btn" type="button">✦ 让缪时写一条</button>
+          </div>
+        </form>
         <div class="msg-list" id="msg-list">${msgListHTML(ROOMS[roomId].key)}</div>
       </div>
       <div class="modal-back" id="modal-back"></div>
@@ -487,7 +489,7 @@ function renderBook() {
                     <button class="book-reply-btn t-user-btn" data-thread="${thread.threadId}">我来说</button>
                   </div>
                   <div class="thread-inline book-inline" id="ir-${thread.threadId}" hidden>
-                    <textarea class="inline-input" placeholder="接着写…" rows="3"></textarea>
+                    <input class="inline-input" type="text" placeholder="接着写…" autocomplete="off">
                     <div class="inline-row">
                       <button class="t-cancel-btn" data-thread="${thread.threadId}">取消</button>
                       <button class="t-send-btn" data-thread="${thread.threadId}">发送</button>
@@ -570,7 +572,7 @@ function sendOnReturn(input, send) {
     submit(e)
   })
   input.addEventListener('beforeinput', e => {
-    if (e.inputType !== 'insertLineBreak') return
+    if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return
     if (allowLineBreak) return
     submit(e)
   })
@@ -620,7 +622,8 @@ function render() {
     document.getElementById('modal-back').addEventListener('click', closeModal)
 
     // Save message
-    document.getElementById('add-btn').addEventListener('click', async () => {
+    document.getElementById('msg-form').addEventListener('submit', async e => {
+      e.preventDefault()
       const btn = document.getElementById('add-btn')
       const input = document.getElementById('msg-input')
       const text  = input.value.trim()
@@ -638,7 +641,7 @@ function render() {
       btn.disabled = false
     })
 
-    sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('add-btn').click())
+    sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('msg-form').requestSubmit())
 
     // Thread action buttons (event delegation)
     document.getElementById('msg-list').addEventListener('click', async (e) => {

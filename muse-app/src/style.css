@@ -271,7 +271,8 @@ body {
   flex-shrink: 0;
 }
 
-textarea {
+textarea,
+input[type="text"] {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -279,7 +280,6 @@ textarea {
   font-size: 16px;
   font-family: inherit;
   padding: 12px;
-  resize: none;
   width: 100%;
   line-height: 1.6;
   outline: none;
@@ -287,8 +287,20 @@ textarea {
   flex-shrink: 0;
 }
 
-textarea:focus     { border-color: var(--accent); }
-textarea::placeholder { color: var(--text-muted); }
+textarea { resize: none; }
+
+textarea:focus,
+input[type="text"]:focus { border-color: var(--accent); }
+
+textarea::placeholder,
+input[type="text"]::placeholder { color: var(--text-muted); }
+
+.msg-form {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 12px;
+}
 
 .btn-row {
   display: flex;
