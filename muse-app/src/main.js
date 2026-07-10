@@ -573,10 +573,14 @@ function sendOnReturn(input, send) {
   input.dataset.returnSends = 'true'
   let composing = false
   let allowLineBreak = false
+  let sending = false
   const submit = e => {
     if (composing || e.isComposing) return
     e.preventDefault()
+    if (sending) return
+    sending = true
     send()
+    setTimeout(() => { sending = false }, 250)
   }
   input.addEventListener('compositionstart', () => { composing = true })
   input.addEventListener('compositionend', () => { composing = false })
@@ -600,7 +604,7 @@ function sendOnReturn(input, send) {
       return
     }
     input.value = input.value.replace(/\n+$/, '')
-    send()
+    submit({ preventDefault() {}, isComposing: false })
   })
 }
 
@@ -658,7 +662,7 @@ function render() {
       btn.disabled = false
     })
 
-    sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('msg-form').requestSubmit())
+    sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('add-btn')?.click())
 
     // Thread action buttons (event delegation)
     document.getElementById('msg-list').addEventListener('click', async (e) => {
