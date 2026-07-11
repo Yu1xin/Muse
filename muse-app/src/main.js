@@ -581,6 +581,8 @@ function sendOnReturn(input, send) {
   let composing = false
   let allowLineBreak = false
   let sending = false
+  const isReturnKey = e =>
+    e.key === 'Enter' || e.key === 'NumpadEnter' || e.code === 'Enter' || e.code === 'NumpadEnter' || e.keyCode === 13 || e.which === 13
   const submit = e => {
     if (composing || e.isComposing) return
     e.preventDefault()
@@ -592,11 +594,15 @@ function sendOnReturn(input, send) {
   input.addEventListener('compositionstart', () => { composing = true })
   input.addEventListener('compositionend', () => { composing = false })
   input.addEventListener('keydown', e => {
-    if (e.key !== 'Enter' && e.key !== 'NumpadEnter') return
+    if (!isReturnKey(e)) return
     if (e.shiftKey) {
       allowLineBreak = true
       return
     }
+    submit(e)
+  })
+  input.addEventListener('keyup', e => {
+    if (!isReturnKey(e) || e.shiftKey) return
     submit(e)
   })
   input.addEventListener('beforeinput', e => {
@@ -650,26 +656,33 @@ function render() {
     document.getElementById('modal-back').addEventListener('click', closeModal)
 
     // Save message
-    document.getElementById('msg-form').addEventListener('submit', async e => {
-      e.preventDefault()
+    async function submitSceneMessage() {
       const btn = document.getElementById('add-btn')
       const input = document.getElementById('msg-input')
       const text  = input.value.trim()
       if (!text) return
       btn.disabled = true
-      const message = await saveMessage(key, text)
-      input.value = ''
-      document.getElementById('msg-list').innerHTML = msgListHTML(key)
-      if (state.room === 'living') {
-        try {
-          await autoReplyInLiving(key, message.threadId || message.id)
-          document.getElementById('msg-list').innerHTML = msgListHTML(key)
-        } catch {}
+      try {
+        const message = await saveMessage(key, text)
+        input.value = ''
+        document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        if (state.room === 'living') {
+          try {
+            await autoReplyInLiving(key, message.threadId || message.id)
+            document.getElementById('msg-list').innerHTML = msgListHTML(key)
+          } catch {}
+        }
+      } finally {
+        btn.disabled = false
       }
-      btn.disabled = false
+    }
+
+    document.getElementById('msg-form').addEventListener('submit', async e => {
+      e.preventDefault()
+      await submitSceneMessage()
     })
 
-    sendOnReturn(document.getElementById('msg-input'), () => document.getElementById('add-btn')?.click())
+    sendOnReturn(document.getElementById('msg-input'), submitSceneMessage)
 
     // Thread action buttons (event delegation)
     document.getElementById('msg-list').addEventListener('click', async (e) => {
@@ -709,7 +722,18 @@ function render() {
           el.hidden = !el.hidden
           if (!el.hidden) {
             const input = el.querySelector('.inline-input')
-            sendOnReturn(input, () => el.querySelector('.t-send-btn')?.click())
+            sendOnReturn(input, async () => {
+              const text = input?.value.trim()
+              if (!text) return
+              await saveMessage(key, text, false, Number(tid))
+              document.getElementById('msg-list').innerHTML = msgListHTML(key)
+              if (state.room === 'living') {
+                try {
+                  await autoReplyInLiving(key, tid)
+                  document.getElementById('msg-list').innerHTML = msgListHTML(key)
+                } catch {}
+              }
+            })
             input?.focus()
           }
         }
