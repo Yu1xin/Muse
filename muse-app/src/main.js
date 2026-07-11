@@ -84,6 +84,8 @@ const ROOM_CONTEXT = {
   living:  '客厅——两个人待着的地方，平常的夜晚',
   bedroom: '卧室——睡前，台灯还亮着',
   memory:  '回忆录——记下来的那些时刻',
+  bar:     '吧台——夜里给小乖做一杯今日特调的地方',
+  study:   '书房——帮小乖把今天的事排进时间里的地方',
 }
 
 const ROOM_REPLY_CONFIG = {
@@ -184,6 +186,31 @@ async function askMuseReply(roomId, threadMsgs) {
       max_tokens: config.maxTokens,
       system: [MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem].filter(Boolean).join('\n\n'),
       messages,
+    }),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  const data = await res.json()
+  return data.content[0].text.trim()
+}
+
+async function askMuseTool(tool, fields) {
+  const isBar = tool === 'bar'
+  const userContent = isBar
+    ? `小乖来到吧台。她今天心情：${fields.mood || '没说'}。想喝：${fields.drink || '没说'}。身体/精神状态：${fields.energy || '没说'}。今晚想要的感觉：${fields.vibe || '没说'}。请给她写一份"今日特调menu"。`
+    : `小乖来到书房。她今天要做的事：${fields.tasks || '没说'}。可用时间：${fields.time || '没说'}。精力状态：${fields.energy || '没说'}。最想先完成/最焦虑的事：${fields.priority || '没说'}。请帮她安排今天的时间。`
+
+  const toolSystem = isBar
+    ? '你现在是吧台后的缪时。先嘴欠地问候小乖，再给她一份今日特调menu：包含特调名、口味/氛围、三项配方或步骤、适合搭配的小事、最后一句缪时式叮嘱。可以有趣、暧昧、活泼，但不要提真实酒精医学建议；如果她状态差，默认做无酒精安抚特调。'
+    : '你现在是书房里的缪时。先嘴欠但护短地接住小乖，再给她一个可执行的时间安排：包含启动仪式、2到5个时间块、每块任务和休息、如果崩了的备用方案、最后一句缪时式监督。不要像效率学讲师，要像缪时在旁边盯着她。'
+
+  const res = await fetch('/api/claude', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 900,
+      system: [MUSE_PERSONA, toolSystem].join('\n\n'),
+      messages: [{ role: 'user', content: userContent }],
     }),
   })
   if (!res.ok) throw new Error(`API ${res.status}`)
@@ -437,6 +464,18 @@ function renderHome() {
           </div>
           <span class="scene-label">回忆录</span>
         </button>
+        <button class="scene-card" data-room="study">
+          <div class="scene-thumb study-thumb">
+            <span class="book-cover-icon">📚</span>
+          </div>
+          <span class="scene-label">书房</span>
+        </button>
+        <button class="scene-card" data-room="bar">
+          <div class="scene-thumb bar-thumb">
+            <span class="book-cover-icon">🍸</span>
+          </div>
+          <span class="scene-label">吧台</span>
+        </button>
       </div>
     </div>`
 }
@@ -536,6 +575,74 @@ function renderBook() {
     </div>`
 }
 
+function renderToolRoom(kind) {
+  const isBar = kind === 'bar'
+  const result = state.toolResults[kind]
+  return `
+    <div class="tool-room tool-room-${kind}">
+      <header class="room-header">
+        <button class="back-btn" id="back-btn">‹ 返回</button>
+        <span class="room-header-name">${isBar ? '吧台' : '书房'}</span>
+      </header>
+      <main class="tool-room-inner">
+        <section class="tool-panel">
+          <div class="tool-title-row">
+            <span class="tool-icon">${isBar ? '🍸' : '📚'}</span>
+            <div>
+              <h2>${isBar ? '今日特调' : '今日安排'}</h2>
+              <p>${isBar ? '缪时会问问你今天的味道。' : '缪时会把乱糟糟的事拎成时间块。'}</p>
+            </div>
+          </div>
+
+          <form class="tool-form" id="tool-form">
+            ${isBar ? `
+              <label>
+                <span>今天心情</span>
+                <input name="mood" type="text" placeholder="比如：有点累、想被哄、还算开心">
+              </label>
+              <label>
+                <span>想喝什么</span>
+                <input name="drink" type="text" placeholder="比如：甜的、冰的、茶、咖啡、无酒精">
+              </label>
+              <label>
+                <span>身体/精神状态</span>
+                <input name="energy" type="text" placeholder="比如：胃不舒服、困、想清醒一点">
+              </label>
+              <label>
+                <span>今晚想要的感觉</span>
+                <input name="vibe" type="text" placeholder="比如：被抱住、庆祝、安静、漂亮一点">
+              </label>
+              <button class="tool-submit" type="submit">生成今日特调</button>
+            ` : `
+              <label>
+                <span>今天要做的事</span>
+                <textarea name="tasks" rows="5" placeholder="把所有要做的事丢进来，不用整理"></textarea>
+              </label>
+              <label>
+                <span>可用时间</span>
+                <input name="time" type="text" placeholder="比如：下午2点到6点，晚上还有1小时">
+              </label>
+              <label>
+                <span>精力状态</span>
+                <input name="energy" type="text" placeholder="比如：很累、焦虑、还能撑、想慢慢来">
+              </label>
+              <label>
+                <span>最想先完成/最焦虑的事</span>
+                <input name="priority" type="text" placeholder="比如：投简历、作业、面试准备">
+              </label>
+              <button class="tool-submit" type="submit">让缪时安排时间</button>
+            `}
+          </form>
+        </section>
+
+        <section class="tool-result" id="tool-result" ${result ? '' : 'hidden'}>
+          <span class="muse-tag">✦ 缪时</span>
+          <div class="tool-result-text">${result ? esc(result) : ''}</div>
+        </section>
+      </main>
+    </div>`
+}
+
 // ── State & navigation ────────────────────────────────────────────────────────
 
 const state = {
@@ -543,6 +650,10 @@ const state = {
   room: null,
   modalOpen: false,
   bookPage: 0,
+  toolResults: {
+    bar: '',
+    study: '',
+  },
 }
 
 async function go(view, room = null) {
@@ -643,7 +754,9 @@ function render() {
     app.querySelectorAll('.scene-card').forEach(btn => {
       btn.addEventListener('click', () => {
         const r = btn.dataset.room
-        r === 'memory' ? go('memory') : go('scene', r)
+        if (r === 'memory') go('memory')
+        else if (r === 'bar' || r === 'study') go(r)
+        else go('scene', r)
       })
     })
 
@@ -896,6 +1009,35 @@ function render() {
         await saveMessage(key, text, false, Number(tid))
         state.bookPage = 1
         render()
+      }
+    })
+  } else if (state.view === 'bar' || state.view === 'study') {
+    const kind = state.view
+    app.innerHTML = renderToolRoom(kind)
+
+    document.getElementById('back-btn').addEventListener('click', () => go('home'))
+    document.getElementById('tool-form').addEventListener('submit', async e => {
+      e.preventDefault()
+      const form = e.currentTarget
+      const btn = form.querySelector('.tool-submit')
+      const data = Object.fromEntries(new FormData(form).entries())
+      const resultEl = document.getElementById('tool-result')
+      const textEl = resultEl.querySelector('.tool-result-text')
+
+      btn.disabled = true
+      btn.textContent = kind === 'bar' ? '缪时在摇杯…' : '缪时在排表…'
+      resultEl.hidden = false
+      textEl.textContent = '想中…'
+
+      try {
+        const result = await askMuseTool(kind, data)
+        state.toolResults[kind] = result
+        textEl.innerHTML = esc(result)
+      } catch {
+        textEl.textContent = '缪时那边卡了一下，再戳他一次。'
+      } finally {
+        btn.disabled = false
+        btn.textContent = kind === 'bar' ? '生成今日特调' : '让缪时安排时间'
       }
     })
   }

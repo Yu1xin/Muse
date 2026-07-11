@@ -82,6 +82,7 @@ body {
 .scene-cards {
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 40px;
   padding: 0 24px;
 }
@@ -114,6 +115,105 @@ body {
   font-size: 12px;
   color: var(--text-muted);
   letter-spacing: 2px;
+}
+
+/* ── Tool rooms ── */
+.tool-room {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #120e18 0%, var(--bg) 100%);
+}
+
+.tool-room-inner {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: 28px 16px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tool-panel,
+.tool-result {
+  border: 1px solid var(--border);
+  background: rgba(26, 20, 36, 0.86);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.tool-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.tool-icon {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.tool-title-row h2 {
+  font-size: 18px;
+  letter-spacing: 2px;
+  margin-bottom: 4px;
+}
+
+.tool-title-row p {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tool-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-form label span {
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.tool-submit {
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  padding: 13px;
+}
+
+.tool-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tool-result {
+  border-color: #4a2068;
+  background: linear-gradient(135deg, rgba(30,14,48,0.92), rgba(24,8,40,0.9));
+}
+
+.tool-result[hidden] {
+  display: none;
+}
+
+.tool-result-text {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.85;
+  word-break: break-word;
 }
 
 /* ── Scene page ── */
