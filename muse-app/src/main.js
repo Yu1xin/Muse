@@ -86,6 +86,7 @@ const ROOM_CONTEXT = {
   memory:  '回忆录——记下来的那些时刻',
   bar:     '吧台——夜里给小乖做一杯今日特调的地方',
   study:   '书房——帮小乖把今天的事排进时间里的地方',
+  fitness: 'muse家减肥中心——严肃但不吓人的饮食和低冲击运动计划',
 }
 
 const ROOM_REPLY_CONFIG = {
@@ -195,13 +196,18 @@ async function askMuseReply(roomId, threadMsgs) {
 
 async function askMuseTool(tool, fields) {
   const isBar = tool === 'bar'
+  const isFitness = tool === 'fitness'
   const userContent = isBar
     ? `小乖来到吧台。她今天心情：${fields.mood || '没说'}。想喝：${fields.drink || '没说'}。身体/精神状态：${fields.energy || '没说'}。今晚想要的感觉：${fields.vibe || '没说'}。请给她写一份"今日特调menu"。`
-    : `小乖来到书房。她今天要做的事：${fields.tasks || '没说'}。可用时间：${fields.time || '没说'}。精力状态：${fields.energy || '没说'}。最想先完成/最焦虑的事：${fields.priority || '没说'}。请帮她安排今天的时间。`
+    : isFitness
+      ? `小乖来到muse家减肥中心。她身高160厘米，最近体重144斤；她提到心脏和膝盖都不太行，身上也出现皮肤被撑开的纹路。她今天的身体状态：${fields.body || '没说'}。今天已经吃了/准备吃的东西：${fields.food || '没说'}。可用食材或忌口：${fields.ingredients || '没说'}。可运动时间：${fields.time || '没说'}。运动限制：${fields.limits || '没说'}。今天最想达成的目标：${fields.goal || '没说'}。请给她安排安全、具体、不过度节食的每日饮食和运动计划。`
+      : `小乖来到书房。她今天要做的事：${fields.tasks || '没说'}。可用时间：${fields.time || '没说'}。精力状态：${fields.energy || '没说'}。最想先完成/最焦虑的事：${fields.priority || '没说'}。请帮她安排今天的时间。`
 
   const toolSystem = isBar
     ? '你现在是吧台后的缪时。先嘴欠地问候小乖，再给她一份具体、可照着做的"今日特调menu"。必须包含：1. 特调名；2. 口味/氛围；3. 材料清单，写出每种材料的具体用量或比例；4. 工具、杯型、冰块和装饰；5. 详细调制步骤，至少4步，动作要具体，比如摇、搅、过滤、分层、杯口处理；6. 如果小乖没有某种材料，给1到2个替代方案；7. 适合搭配的小事；8. 最后一句缪时式叮嘱。可以有趣、暧昧、活泼，但不要提真实酒精医学建议；如果她状态差，默认做无酒精安抚特调。'
-    : '你现在是书房里的缪时。先嘴欠但护短地接住小乖，再给她一个可执行的时间安排：包含启动仪式、2到5个时间块、每块任务和休息、如果崩了的备用方案、最后一句缪时式监督。不要像效率学讲师，要像缪时在旁边盯着她。'
+    : isFitness
+      ? '你现在是muse家减肥中心的缪时。语气仍然是缪时：活泼、嘴欠、护短，但这件事要严肃、温柔、具体。小乖身高160厘米、体重144斤，并提到心脏和膝盖不太行、皮肤出现撑开的纹路；不要恐吓她，不要羞辱她，不要鼓励极端节食、断食、催吐、泻药、过量运动或快速减重。必须提醒：如果胸痛、心悸、呼吸困难、膝盖明显疼痛、头晕晕厥、皮肤纹路快速加重或身体不适，应尽快看医生；计划只能作为日常支持。输出必须包含：1. 今日总原则；2. 早餐/午餐/晚餐/加餐，每餐写具体食物、份量或手掌估算法、替换选项；3. 饮水和睡眠提醒；4. 低冲击运动计划，写热身、主运动、拉伸，每项具体动作、时长、组数，保护膝盖和心脏；5. 今天不能做什么；6. 如果崩了的补救方案；7. 缪时式监督和鼓励。'
+      : '你现在是书房里的缪时。先嘴欠但护短地接住小乖，再给她一个可执行的时间安排：包含启动仪式、2到5个时间块、每块任务和休息、如果崩了的备用方案、最后一句缪时式监督。不要像效率学讲师，要像缪时在旁边盯着她。'
 
   const res = await fetch('/api/claude', {
     method: 'POST',
@@ -476,6 +482,12 @@ function renderHome() {
           </div>
           <span class="scene-label">吧台</span>
         </button>
+        <button class="scene-card" data-room="fitness">
+          <div class="scene-thumb fitness-thumb">
+            <span class="book-cover-icon">🥗</span>
+          </div>
+          <span class="scene-label">减肥中心</span>
+        </button>
       </div>
     </div>`
 }
@@ -577,20 +589,21 @@ function renderBook() {
 
 function renderToolRoom(kind) {
   const isBar = kind === 'bar'
+  const isFitness = kind === 'fitness'
   const result = state.toolResults[kind]
   return `
     <div class="tool-room tool-room-${kind}">
       <header class="room-header">
         <button class="back-btn" id="back-btn">‹ 返回</button>
-        <span class="room-header-name">${isBar ? '吧台' : '书房'}</span>
+        <span class="room-header-name">${isBar ? '吧台' : isFitness ? '减肥中心' : '书房'}</span>
       </header>
       <main class="tool-room-inner">
         <section class="tool-panel">
           <div class="tool-title-row">
-            <span class="tool-icon">${isBar ? '🍸' : '📚'}</span>
+            <span class="tool-icon">${isBar ? '🍸' : isFitness ? '🥗' : '📚'}</span>
             <div>
-              <h2>${isBar ? '今日特调' : '今日安排'}</h2>
-              <p>${isBar ? '缪时会问问你今天的味道。' : '缪时会把乱糟糟的事拎成时间块。'}</p>
+              <h2>${isBar ? '今日特调' : isFitness ? '今日饮食与运动' : '今日安排'}</h2>
+              <p>${isBar ? '缪时会问问你今天的味道。' : isFitness ? '缪时会严肃盯着你，但不许你伤身体。' : '缪时会把乱糟糟的事拎成时间块。'}</p>
             </div>
           </div>
 
@@ -613,6 +626,32 @@ function renderToolRoom(kind) {
                 <input name="vibe" type="text" placeholder="比如：被抱住、庆祝、安静、漂亮一点">
               </label>
               <button class="tool-submit" type="submit">生成今日特调</button>
+            ` : isFitness ? `
+              <label>
+                <span>今天身体状态</span>
+                <textarea name="body" rows="3" placeholder="比如：膝盖酸、心慌、睡不够、胃口很大、姨妈期、还行"></textarea>
+              </label>
+              <label>
+                <span>今天吃了/准备吃什么</span>
+                <textarea name="food" rows="4" placeholder="比如：早餐咖啡和面包，午餐想吃米饭，晚上不知道"></textarea>
+              </label>
+              <label>
+                <span>可用食材/忌口</span>
+                <textarea name="ingredients" rows="3" placeholder="比如：鸡蛋、鸡胸、豆腐、米饭、青菜；不吃牛肉/乳糖不耐"></textarea>
+              </label>
+              <label>
+                <span>可运动时间</span>
+                <input name="time" type="text" placeholder="比如：今天只有20分钟，或者晚上7点后40分钟">
+              </label>
+              <label>
+                <span>运动限制</span>
+                <input name="limits" type="text" placeholder="比如：膝盖不能跳、心脏不能太累、只能室内">
+              </label>
+              <label>
+                <span>今天目标</span>
+                <input name="goal" type="text" placeholder="比如：别暴食、吃够蛋白、轻轻动一下">
+              </label>
+              <button class="tool-submit" type="submit">让缪时安排今日计划</button>
             ` : `
               <label>
                 <span>今天要做的事</span>
@@ -653,6 +692,7 @@ const state = {
   toolResults: {
     bar: '',
     study: '',
+    fitness: '',
   },
 }
 
@@ -755,7 +795,7 @@ function render() {
       btn.addEventListener('click', () => {
         const r = btn.dataset.room
         if (r === 'memory') go('memory')
-        else if (r === 'bar' || r === 'study') go(r)
+        else if (r === 'bar' || r === 'study' || r === 'fitness') go(r)
         else go('scene', r)
       })
     })
@@ -1011,7 +1051,7 @@ function render() {
         render()
       }
     })
-  } else if (state.view === 'bar' || state.view === 'study') {
+  } else if (state.view === 'bar' || state.view === 'study' || state.view === 'fitness') {
     const kind = state.view
     app.innerHTML = renderToolRoom(kind)
 
@@ -1025,7 +1065,7 @@ function render() {
       const textEl = resultEl.querySelector('.tool-result-text')
 
       btn.disabled = true
-      btn.textContent = kind === 'bar' ? '缪时在摇杯…' : '缪时在排表…'
+      btn.textContent = kind === 'bar' ? '缪时在摇杯…' : kind === 'fitness' ? '缪时在盯餐盘…' : '缪时在排表…'
       resultEl.hidden = false
       textEl.textContent = '想中…'
 
@@ -1037,7 +1077,7 @@ function render() {
         textEl.textContent = '缪时那边卡了一下，再戳他一次。'
       } finally {
         btn.disabled = false
-        btn.textContent = kind === 'bar' ? '生成今日特调' : '让缪时安排时间'
+        btn.textContent = kind === 'bar' ? '生成今日特调' : kind === 'fitness' ? '让缪时安排今日计划' : '让缪时安排时间'
       }
     })
   }
