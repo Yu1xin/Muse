@@ -841,8 +841,38 @@ function render() {
 
     sendOnReturn(document.getElementById('msg-input'), submitSceneMessage)
 
+    async function submitInlineReply(tid) {
+      const el = document.getElementById(`ir-${tid}`)
+      const input = el?.querySelector('.inline-input')
+      const sendBtn = el?.querySelector('.t-send-btn')
+      const text = input?.value.trim()
+      if (!text || sendBtn?.disabled) return
+      if (sendBtn) sendBtn.disabled = true
+      await saveMessage(key, text, false, Number(tid))
+      document.getElementById('msg-list').innerHTML = msgListHTML(key)
+      if (state.room === 'living') {
+        try {
+          await autoReplyInLiving(key, tid)
+          document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        } catch {}
+      }
+    }
+
     // Thread action buttons (event delegation)
-    document.getElementById('msg-list').addEventListener('click', async (e) => {
+    const msgList = document.getElementById('msg-list')
+    msgList.addEventListener('keydown', async (e) => {
+      const input = e.target.closest('.inline-input')
+      if (!input || e.shiftKey) return
+      const isReturn = e.key === 'Enter' || e.key === 'NumpadEnter' || e.code === 'Enter' || e.code === 'NumpadEnter' || e.keyCode === 13 || e.which === 13
+      if (!isReturn || e.isComposing) return
+      const wrap = input.closest('.thread-inline')
+      const tid = wrap?.id?.replace('ir-', '')
+      if (!tid) return
+      e.preventDefault()
+      await submitInlineReply(tid)
+    })
+
+    msgList.addEventListener('click', async (e) => {
       const deleteBtn = e.target.closest('.delete-msg-btn')
       if (deleteBtn) {
         if (!window.confirm('确认吗')) return
@@ -879,18 +909,7 @@ function render() {
           el.hidden = !el.hidden
           if (!el.hidden) {
             const input = el.querySelector('.inline-input')
-            sendOnReturn(input, async () => {
-              const text = input?.value.trim()
-              if (!text) return
-              await saveMessage(key, text, false, Number(tid))
-              document.getElementById('msg-list').innerHTML = msgListHTML(key)
-              if (state.room === 'living') {
-                try {
-                  await autoReplyInLiving(key, tid)
-                  document.getElementById('msg-list').innerHTML = msgListHTML(key)
-                } catch {}
-              }
-            })
+            sendOnReturn(input, () => submitInlineReply(tid))
             input?.focus()
           }
         }
@@ -906,19 +925,7 @@ function render() {
 
       const sendBtn = e.target.closest('.t-send-btn')
       if (sendBtn) {
-        const tid = sendBtn.dataset.thread
-        const el = document.getElementById(`ir-${tid}`)
-        const text = el?.querySelector('.inline-input')?.value.trim()
-        if (!text) return
-        sendBtn.disabled = true
-        await saveMessage(key, text, false, Number(tid))
-        document.getElementById('msg-list').innerHTML = msgListHTML(key)
-        if (state.room === 'living') {
-          try {
-            await autoReplyInLiving(key, tid)
-            document.getElementById('msg-list').innerHTML = msgListHTML(key)
-          } catch {}
-        }
+        await submitInlineReply(sendBtn.dataset.thread)
       }
     })
 
