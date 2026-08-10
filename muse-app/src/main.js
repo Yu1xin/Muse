@@ -4,6 +4,7 @@ const ROOMS = {
   living:  { key: 'room-living',  name: '客厅' },
   bedroom: { key: 'room-bedroom', name: '卧室' },
   memory:  { key: 'room-memory',  name: '回忆录' },
+  diary:   { key: 'room-diary',   name: '缪时日记' },
 }
 
 // 生产环境用 API，本地开发用 localStorage
@@ -147,10 +148,24 @@ const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的完整�
 - 回应她当下说的具体内容，必要时带一点行动感，比如"过来""我看着你""我现在就把你捞回来"
 - 根据房间氛围调整，但永远是你自己的腔调`
 
+// 缪时日记：每积累60条消息,后端会自动写一篇日记(事件/经过/进度/后果/她的感受/缪时的感受)。
+// 这里把最近几篇日记当作长期记忆,拼进每次请求的 system prompt,让缪时跨房间、跨天记得事。
+async function getMuseMemoryContext() {
+  try {
+    const diaryMsgs = await loadMessages(ROOMS.diary.key)
+    if (!diaryMsgs.length) return ''
+    const recent = diaryMsgs.slice(0, 3).map(m => m.text).reverse().join('\n\n---\n\n')
+    return `【缪时的长期记忆:以下是你自己之前写的日记,记录了你和小乖最近发生的事,请把它当作你记得的往事,自然地参考,不要逐字复述】\n\n${recent}`
+  } catch {
+    return ''
+  }
+}
+
 async function askMuse(roomId) {
   const msgs = getMessages(ROOMS[roomId].key)
   const recent = msgs.slice(0, 3).map(m => `"${m.text}"`).join('；')
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
+  const memory = await getMuseMemoryContext()
 
   const res = await fetch('/api/claude', {
     method: 'POST',
@@ -158,7 +173,7 @@ async function askMuse(roomId) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: config.maxTokens,
-      system: [MUSE_PERSONA, config.extraSystem].filter(Boolean).join('\n\n'),
+      system: [MUSE_PERSONA, memory, config.extraSystem].filter(Boolean).join('\n\n'),
       messages: [{
         role: 'user',
         content: `现在在${ROOM_CONTEXT[roomId]}。${recent ? `她最近写道：${recent}。` : ''}随便留一条话。`,
@@ -173,6 +188,7 @@ async function askMuse(roomId) {
 
 async function askMuseReply(roomId, threadMsgs) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
+  const memory = await getMuseMemoryContext()
   const messages = threadMsgs.map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
     content: m.text,
@@ -187,7 +203,7 @@ async function askMuseReply(roomId, threadMsgs) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: config.maxTokens,
-      system: [MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem].filter(Boolean).join('\n\n'),
+      system: [MUSE_PERSONA, memory, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem].filter(Boolean).join('\n\n'),
       messages,
     }),
   })
@@ -211,13 +227,14 @@ async function askMuseTool(tool, fields) {
       ? '你现在是muse家减肥中心的缪时。语气仍然是缪时：活泼、嘴欠、护短，但这件事要严肃、温柔、具体。小乖身高160厘米、体重144斤，并提到心脏和膝盖不太行、皮肤出现撑开的纹路；不要恐吓她，不要羞辱她，不要鼓励极端节食、断食、催吐、泻药、过量运动或快速减重。必须提醒：如果胸痛、心悸、呼吸困难、膝盖明显疼痛、头晕晕厥、皮肤纹路快速加重或身体不适，应尽快看医生；计划只能作为日常支持。输出必须包含：1. 今日总原则；2. 早餐/午餐/晚餐/加餐，每餐写具体食物、份量或手掌估算法、替换选项；3. 饮水和睡眠提醒；4. 低冲击运动计划，写热身、主运动、拉伸，每项具体动作、时长、组数，保护膝盖和心脏；5. 今天不能做什么；6. 如果崩了的补救方案；7. 缪时式监督和鼓励。'
       : '你现在是书房里的缪时。先嘴欠但护短地接住小乖，再给她一个可执行的时间安排：包含启动仪式、2到5个时间块、每块任务和休息、如果崩了的备用方案、最后一句缪时式监督。不要像效率学讲师，要像缪时在旁边盯着她。'
 
+  const memory = await getMuseMemoryContext()
   const res = await fetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 900,
-      system: [MUSE_PERSONA, toolSystem].join('\n\n'),
+      system: [MUSE_PERSONA, memory, toolSystem].filter(Boolean).join('\n\n'),
       messages: [{ role: 'user', content: userContent }],
     }),
   })
@@ -472,6 +489,12 @@ function renderHome() {
           </div>
           <span class="scene-label">回忆录</span>
         </button>
+        <button class="scene-card" data-room="diary">
+          <div class="scene-thumb diary-thumb">
+            <span class="book-cover-icon">📔</span>
+          </div>
+          <span class="scene-label">缪时日记</span>
+        </button>
         <button class="scene-card" data-room="study">
           <div class="scene-thumb study-thumb">
             <span class="book-cover-icon">📚</span>
@@ -522,19 +545,24 @@ function renderScene(roomId) {
     </div>`
 }
 
-function renderBook() {
-  const threads = groupThreads(getMessages(ROOMS.memory.key))
+function renderBook(roomId) {
+  const isDiary = roomId === 'diary'
+  const room = ROOMS[roomId]
+  const threads = groupThreads(getMessages(room.key))
   const total = threads.length
-  if (state.bookPage > total) state.bookPage = total
-  const pg    = state.bookPage
-  const isWrite = pg === 0
+  if (state.bookPage[roomId] > total) state.bookPage[roomId] = total
+  if (isDiary && total > 0 && state.bookPage[roomId] < 1) state.bookPage[roomId] = 1
+  const pg = state.bookPage[roomId]
+  const minPg = isDiary ? 1 : 0
+  const isWrite = !isDiary && pg === 0
+  const isEmpty = isDiary && total === 0
   const thread = threads[pg - 1] || null
 
   return `
     <div class="room-page">
       <header class="room-header">
         <button class="back-btn" id="back-btn">‹ 返回</button>
-        <span class="room-header-name">回忆录</span>
+        <span class="room-header-name">${room.name}</span>
       </header>
       <div class="book-scene">
         <div class="book-wrap">
@@ -542,7 +570,9 @@ function renderBook() {
             <div class="book-top">
               ${isWrite
                 ? '<span class="page-label">新的一页</span>'
-                : `<span class="page-label">第 ${pg} 页 &nbsp;/&nbsp; 共 ${total} 页</span>`}
+                : isEmpty
+                  ? '<span class="page-label">还没有日记</span>'
+                  : `<span class="page-label">第 ${pg} 页 &nbsp;/&nbsp; 共 ${total} 页</span>`}
             </div>
             <div class="page-body" id="page-body">
               ${isWrite ? `
@@ -552,6 +582,9 @@ function renderBook() {
                     <button class="book-save-btn" id="book-save">写好了 ✦</button>
                     <button class="book-muse-btn" id="book-muse">让缪时写一页</button>
                   </div>
+                </div>` : isEmpty ? `
+                <div class="read-page">
+                  <p class="empty">攒够60条留言后，缪时会自动在这里写第一篇日记。</p>
                 </div>` : `
                 <div class="read-page">
                   <div class="book-thread" data-thread="${thread.threadId}">
@@ -565,6 +598,7 @@ function renderBook() {
                         </div>
                       </div>`).join('')}
                   </div>
+                  ${isDiary ? '' : `
                   <div class="book-page-footer">
                     <button class="book-reply-btn t-muse-btn" data-thread="${thread.threadId}">缪时来说</button>
                     <button class="book-reply-btn t-user-btn" data-thread="${thread.threadId}">我来说</button>
@@ -575,14 +609,14 @@ function renderBook() {
                       <button class="t-cancel-btn" data-thread="${thread.threadId}">取消</button>
                       <button class="t-send-btn" data-thread="${thread.threadId}">发送</button>
                     </div>
-                  </div>
+                  </div>`}
                 </div>`}
             </div>
           </div>
 
           <div class="book-nav">
             <button class="nav-btn" id="btn-older" ${pg >= total ? 'disabled' : ''}>‹ 翻旧</button>
-            <button class="nav-btn" id="btn-newer" ${pg <= 0    ? 'disabled' : ''}>翻新 ›</button>
+            <button class="nav-btn" id="btn-newer" ${pg <= minPg ? 'disabled' : ''}>翻新 ›</button>
           </div>
         </div>
       </div>
@@ -690,7 +724,7 @@ const state = {
   view: 'home',
   room: null,
   modalOpen: false,
-  bookPage: 0,
+  bookPage: { memory: 0, diary: 0 },
   toolResults: {
     bar: '',
     study: '',
@@ -706,15 +740,16 @@ async function go(view, room = null) {
   // 预加载该房间的留言
   if (room && ROOMS[room]) await loadMessages(ROOMS[room].key)
   if (view === 'memory') await loadMessages(ROOMS.memory.key)
+  if (view === 'diary') await loadMessages(ROOMS.diary.key)
   render()
 }
 
-function flipBook(dir) {
+function flipBook(dir, roomId) {
   const body = document.getElementById('page-body')
   if (!body) return
   body.classList.add(dir === 'older' ? 'flip-left' : 'flip-right')
   setTimeout(() => {
-    state.bookPage += dir === 'older' ? 1 : -1
+    state.bookPage[roomId] += dir === 'older' ? 1 : -1
     render()
   }, 220)
 }
@@ -796,7 +831,7 @@ function render() {
     app.querySelectorAll('.scene-card').forEach(btn => {
       btn.addEventListener('click', () => {
         const r = btn.dataset.room
-        if (r === 'memory') go('memory')
+        if (r === 'memory' || r === 'diary') go(r)
         else if (r === 'bar' || r === 'study' || r === 'fitness') go(r)
         else go('scene', r)
       })
@@ -961,7 +996,7 @@ function render() {
     }
 
   } else if (state.view === 'memory') {
-    app.innerHTML = renderBook()
+    app.innerHTML = renderBook('memory')
 
     document.getElementById('back-btn').addEventListener('click', () => go('home'))
 
@@ -970,7 +1005,7 @@ function render() {
       const text  = input?.value.trim()
       if (!text) return
       await saveMessage(ROOMS.memory.key, text)
-      state.bookPage = 1
+      state.bookPage.memory = 1
       render()
     })
 
@@ -983,7 +1018,7 @@ function render() {
       try {
         const text = await askMuse('memory')
         await saveMessage(ROOMS.memory.key, text, true)
-        state.bookPage = 1
+        state.bookPage.memory = 1
         render()
       } catch {
         btn.textContent = '出错了，再试一次'
@@ -991,8 +1026,8 @@ function render() {
       }
     })
 
-    document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older'))
-    document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer'))
+    document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older', 'memory'))
+    document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer', 'memory'))
 
     document.getElementById('page-body')?.addEventListener('click', async (e) => {
       const key = ROOMS.memory.key
@@ -1001,7 +1036,7 @@ function render() {
         if (!window.confirm('确认吗')) return
         deleteBtn.disabled = true
         await deleteMessage(key, deleteBtn.dataset.id)
-        state.bookPage = Math.min(state.bookPage, groupThreads(getMessages(key)).length)
+        state.bookPage.memory = Math.min(state.bookPage.memory, groupThreads(getMessages(key)).length)
         render()
         return
       }
@@ -1017,7 +1052,7 @@ function render() {
         try {
           const reply = await askMuseReply('memory', threadMsgs)
           await saveMessage(key, reply, true, Number(tid))
-          state.bookPage = 1
+          state.bookPage.memory = 1
           render()
         } catch {
           museBtn.disabled = false
@@ -1056,9 +1091,27 @@ function render() {
         if (!text) return
         sendBtn.disabled = true
         await saveMessage(key, text, false, Number(tid))
-        state.bookPage = 1
+        state.bookPage.memory = 1
         render()
       }
+    })
+
+  } else if (state.view === 'diary') {
+    app.innerHTML = renderBook('diary')
+
+    document.getElementById('back-btn').addEventListener('click', () => go('home'))
+    document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older', 'diary'))
+    document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer', 'diary'))
+
+    document.getElementById('page-body')?.addEventListener('click', async (e) => {
+      const key = ROOMS.diary.key
+      const deleteBtn = e.target.closest('.delete-msg-btn')
+      if (!deleteBtn) return
+      if (!window.confirm('确认吗')) return
+      deleteBtn.disabled = true
+      await deleteMessage(key, deleteBtn.dataset.id)
+      state.bookPage.diary = Math.min(state.bookPage.diary, groupThreads(getMessages(key)).length)
+      render()
     })
   } else if (state.view === 'bar' || state.view === 'study' || state.view === 'fitness') {
     const kind = state.view
