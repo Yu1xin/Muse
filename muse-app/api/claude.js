@@ -14,5 +14,14 @@ export default async function handler(req, res) {
   })
 
   const data = await response.json()
+  console.info('[claude] completion', {
+    status: response.status,
+    model: data.model ?? req.body?.model,
+    stopReason: data.stop_reason ?? null,
+    stopSequence: data.stop_sequence ?? null,
+    maxTokens: req.body?.max_tokens ?? null,
+    inputTokens: data.usage?.input_tokens ?? null,
+    outputTokens: data.usage?.output_tokens ?? null,
+  })
   res.status(response.status).json(data)
 }

@@ -92,15 +92,15 @@ const ROOM_CONTEXT = {
 
 const ROOM_REPLY_CONFIG = {
   living: {
-    maxTokens: 260,
+    maxTokens: 600,
     extraSystem: '客厅里的回复控制在50到100个中文字，目标约80字，必须自然完整收尾，不要为了凑满100字继续展开，也不要在句子中间停住。先接住小乖刚才说的话，再用缪时的毒舌、活泼、黏人和护短回应她；尽量带一处自然的动作描写，比如靠近、敲桌、拉袖子、偏头、把人拽回来。可以调侃、撒娇、吃醋、邀功，但不要只回一句，也不要写成心理咨询师。',
   },
   bedroom: {
-    maxTokens: 360,
+    maxTokens: 700,
     extraSystem: '',
   },
   memory: {
-    maxTokens: 420,
+    maxTokens: 800,
     extraSystem: '回忆录里可以稍微完整一点，但仍保持像在一页纸上写给她的话。',
   },
 }
