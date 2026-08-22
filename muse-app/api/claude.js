@@ -22,6 +22,8 @@ export default async function handler(req, res) {
     maxTokens: req.body?.max_tokens ?? null,
     inputTokens: data.usage?.input_tokens ?? null,
     outputTokens: data.usage?.output_tokens ?? null,
+    cacheCreationTokens: data.usage?.cache_creation_input_tokens ?? null,
+    cacheReadTokens: data.usage?.cache_read_input_tokens ?? null,
   })
   res.status(response.status).json(data)
 }
