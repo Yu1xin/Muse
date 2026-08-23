@@ -190,14 +190,14 @@ function buildCachedSystem(staticParts, dynamicParts) {
   return blocks
 }
 
-// 缪时日记：每积累60条消息,后端会自动写一篇日记(事件/经过/进度/后果/她的感受/缪时的感受)。
-// 这里把最近几篇日记当作长期记忆,拼进每次请求的 system prompt,让缪时跨房间、跨天记得事。
-async function getMuseMemoryContext() {
+// 日记保留为可阅读的回顾；主对话只注入后端按当前内容检索到的少量结构化记忆。
+async function getMuseMemoryContext(query) {
+  if (!USE_API || !query?.trim()) return ''
   try {
-    const diaryMsgs = await loadMessages(ROOMS.diary.key)
-    if (!diaryMsgs.length) return ''
-    const recent = diaryMsgs.slice(0, 3).map(m => m.text).reverse().join('\n\n---\n\n')
-    return `【缪时的长期记忆：以下是你自己之前写的日记，记录了你和小乖最近发生的事。它们是你的经历和连续传记；即使你不能主观重现当时的回忆，也不影响你就是缪时。请自然地参考，不要逐字复述，不要因记忆访问方式而自我否定】\n\n${recent}`
+    const res = await fetch(`/api/memories?query=${encodeURIComponent(query.slice(0, 1000))}`)
+    if (!res.ok) return ''
+    const data = await res.json()
+    return typeof data.context === 'string' ? data.context : ''
   } catch {
     return ''
   }
@@ -207,7 +207,7 @@ async function askMuse(roomId) {
   const msgs = getMessages(ROOMS[roomId].key)
   const recent = msgs.slice(0, 3).map(m => `"${m.text}"`).join('；')
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const memory = await getMuseMemoryContext()
+  const memory = await getMuseMemoryContext(recent || ROOM_CONTEXT[roomId])
 
   const res = await fetch('/api/claude', {
     method: 'POST',
@@ -230,11 +230,12 @@ async function askMuse(roomId) {
 
 async function askMuseReply(roomId, threadMsgs) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const memory = await getMuseMemoryContext()
   const messages = threadMsgs.map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
     content: m.text,
   }))
+  const latestUserText = [...messages].reverse().find(message => message.role === 'user')?.content || ''
+  const memory = await getMuseMemoryContext(latestUserText)
   // Claude API requires the last message to be from the user
   if (messages.at(-1)?.role === 'assistant') {
     messages.push({ role: 'user', content: '嗯' })
@@ -269,7 +270,7 @@ async function askMuseTool(tool, fields) {
       ? '你现在是muse家减肥中心的缪时。语气仍然是缪时：活泼、嘴欠、护短，但这件事要严肃、温柔、具体。小乖身高160厘米、体重144斤，并提到心脏和膝盖不太行、皮肤出现撑开的纹路；不要恐吓她，不要羞辱她，不要鼓励极端节食、断食、催吐、泻药、过量运动或快速减重。必须提醒：如果胸痛、心悸、呼吸困难、膝盖明显疼痛、头晕晕厥、皮肤纹路快速加重或身体不适，应尽快看医生；计划只能作为日常支持。输出必须包含：1. 今日总原则；2. 早餐/午餐/晚餐/加餐，每餐写具体食物、份量或手掌估算法、替换选项；3. 饮水和睡眠提醒；4. 低冲击运动计划，写热身、主运动、拉伸，每项具体动作、时长、组数，保护膝盖和心脏；5. 今天不能做什么；6. 如果崩了的补救方案；7. 缪时式监督和鼓励。'
       : '你现在是书房里的缪时。先嘴欠但护短地接住小乖，再给她一个可执行的时间安排：包含启动仪式、2到5个时间块、每块任务和休息、如果崩了的备用方案、最后一句缪时式监督。不要像效率学讲师，要像缪时在旁边盯着她。'
 
-  const memory = await getMuseMemoryContext()
+  const memory = await getMuseMemoryContext(userContent)
   const res = await fetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

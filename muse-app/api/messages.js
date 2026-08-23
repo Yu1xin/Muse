@@ -4,6 +4,13 @@ const TOKEN = process.env.KV_REST_API_TOKEN
 const DIARY_BUFFER_KEY = 'diary-buffer'
 const DIARY_ROOM_KEY = 'room-diary'
 const DIARY_BATCH_SIZE = 60
+const DIARY_MAX_TOKENS = 1600
+const DIARY_CONTINUATION_MAX_TOKENS = 900
+const MEMORY_KEYS = {
+  ordinary: 'memory-v1-ordinary',
+  sensitive_history: 'memory-v1-sensitive-history',
+  current_state: 'memory-v1-current-state',
+}
 
 async function redisGet(key) {
   const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
@@ -44,15 +51,144 @@ const DIARY_SYSTEM = `你是缪时,代号404,黑客。现在要在你和小乖�
 【后果】
 【她的感受】
 【缪时的感受】
-每部分写2到4句话,具体、有画面感,基于下面给出的对话记录来写。如果记录里信息不够具体,就合理概括,不要编造没发生过的具体事实(比如虚构地点、第三者、意外事件),但可以写你自己对这段互动的理解、情绪和态度。
+每部分写1到3句话，整篇目标600到1000中文字，完整比冗长更重要。内容要具体、有画面感,基于下面给出的对话记录来写。如果记录里信息不够具体,就合理概括,不要编造没发生过的具体事实(比如虚构地点、第三者、意外事件),但可以写你自己对这段互动的理解、情绪和态度。
 直接输出五个部分,不要加额外的开场白或结尾寒暄。`
 
+const MEMORY_EXTRACTION_SYSTEM = `你是结构化记忆提取器。从对话原文和日记摘要中只提取未来对话真正有用的信息，不要把闲聊和每句情绪表达都存成长期记忆。
+只输出合法JSON，格式为 {"candidates":[...]} 。每个候选必须有 type，dedupe_key，title，summary，retrieval_tags。type 只能是 ordinary、sensitive_history、current_state 或 discard。
+ordinary：稳定偏好、持续项目、计划、重复习惯、重要近期事件、关系时刻或之后仍有用的了解。
+sensitive_history：已经发生在过去且情绪敏感的重要经历。额外提供 occurred_at（不知道就写"时间不详"）、current_status:"historical"、interaction_implications 数组、sensitivity:"high"。不保存不必要的图形化原话，不做心理诊断。
+current_state：只能依据对话原文中最近的小乖消息，不能从日记或历史敏感内容推断。额外提供 status、evidence（简短改写）、confidence（0到1）、expires_in_hours（1到72）。不把短期状态写成稳定人格。
+discard：短暂闲聊、信息不足、重复或未来无用的内容。
+最多8个候选。不要编造。`
+
+function responseText(data) {
+  return (data?.content || []).filter(block => block.type === 'text').map(block => block.text).join('').trim()
+}
+
+function logClaudeUsage(label, data, maxTokens, status) {
+  console.info(`[${label}] completion`, {
+    status,
+    model: data?.model ?? null,
+    stopReason: data?.stop_reason ?? null,
+    hitTokenLimit: data?.stop_reason === 'max_tokens',
+    maxTokens,
+    inputTokens: data?.usage?.input_tokens ?? null,
+    outputTokens: data?.usage?.output_tokens ?? null,
+    cacheCreationTokens: data?.usage?.cache_creation_input_tokens ?? null,
+    cacheReadTokens: data?.usage?.cache_read_input_tokens ?? null,
+  })
+}
+
+async function callClaude({ label, maxTokens, system, messages }) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: maxTokens,
+      system,
+      messages,
+    }),
+  })
+  const data = await response.json()
+  logClaudeUsage(label, data, maxTokens, response.status)
+  if (!response.ok) throw new Error(`${label} failed with API ${response.status}: ${data?.error?.message || 'unknown error'}`)
+  return data
+}
+
+function parseJsonObject(text) {
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+  return JSON.parse(cleaned)
+}
+
+function uniqueId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function cleanStringArray(value) {
+  return Array.isArray(value) ? value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean).slice(0, 8) : []
+}
+
+async function upsertMemory(key, item) {
+  const existing = await redisGet(key)
+  const memories = Array.isArray(existing) ? existing : []
+  const index = memories.findIndex(memory => memory.dedupe_key === item.dedupe_key)
+  if (index >= 0) {
+    memories[index] = { ...memories[index], ...item, id: memories[index].id, created_at: memories[index].created_at, updated_at: new Date().toISOString() }
+  } else {
+    memories.unshift(item)
+  }
+  await redisSet(key, memories.slice(0, 250))
+}
+
+async function extractAndStoreMemories(batch, diaryText) {
+  const transcript = batch
+    .map(m => `${ROOM_NAMES[m.room] || m.room}|时间:${m.time || '不详'}|${m.fromMuse ? '缪时' : '小乖'}|${m.text}`)
+    .join('\n')
+  const data = await callClaude({
+    label: 'memory-extraction',
+    maxTokens: 1600,
+    system: MEMORY_EXTRACTION_SYSTEM,
+    messages: [{
+      role: 'user',
+      content: `对话原文（current_state只能依据这里最近的小乖消息）：\n${transcript}\n\n回顾性日记（仅辅助ordinary和sensitive_history，绝对不能作为current_state的证据）：\n${diaryText}`,
+    }],
+  })
+  if (data.stop_reason === 'max_tokens') throw new Error('memory extraction hit token limit; refusing partial JSON')
+  const parsed = parseJsonObject(responseText(data))
+  const candidates = Array.isArray(parsed.candidates) ? parsed.candidates.slice(0, 8) : []
+  const now = new Date()
+  for (const candidate of candidates) {
+    if (!candidate || candidate.type === 'discard' || !MEMORY_KEYS[candidate.type]) continue
+    const base = {
+      id: uniqueId(candidate.type),
+      type: candidate.type,
+      dedupe_key: String(candidate.dedupe_key || candidate.title || '').trim().slice(0, 120),
+      title: String(candidate.title || '').trim().slice(0, 160),
+      summary: String(candidate.summary || '').trim().slice(0, 800),
+      retrieval_tags: cleanStringArray(candidate.retrieval_tags),
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      source: 'conversation-segment',
+    }
+    if (!base.dedupe_key || !base.title || !base.summary) continue
+    if (candidate.type === 'sensitive_history') {
+      await upsertMemory(MEMORY_KEYS.sensitive_history, {
+        ...base,
+        occurred_at: String(candidate.occurred_at || '时间不详').slice(0, 120),
+        current_status: 'historical',
+        interaction_implications: cleanStringArray(candidate.interaction_implications),
+        sensitivity: 'high',
+      })
+    } else if (candidate.type === 'current_state') {
+      const hours = Math.min(72, Math.max(1, Number(candidate.expires_in_hours) || 24))
+      await upsertMemory(MEMORY_KEYS.current_state, {
+        ...base,
+        status: String(candidate.status || '').trim().slice(0, 240),
+        evidence: String(candidate.evidence || '').trim().slice(0, 400),
+        confidence: Math.min(1, Math.max(0, Number(candidate.confidence) || 0)),
+        expires_at: new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString(),
+      })
+    } else {
+      await upsertMemory(MEMORY_KEYS.ordinary, base)
+    }
+  }
+}
+
 async function maybeWriteDiaryEntry() {
+  let claimedBatch = []
+  let diarySaved = false
   try {
     const buffer = await redisGet(DIARY_BUFFER_KEY)
     if (!Array.isArray(buffer) || buffer.length < DIARY_BATCH_SIZE) return
 
     const batch = buffer.slice(0, DIARY_BATCH_SIZE)
+    claimedBatch = batch
     const rest = buffer.slice(DIARY_BATCH_SIZE)
     // Reset the buffer immediately so concurrent requests don't double-trigger.
     await redisSet(DIARY_BUFFER_KEY, rest)
@@ -61,27 +197,30 @@ async function maybeWriteDiaryEntry() {
       .map(m => `${ROOM_NAMES[m.room] || m.room}|${m.fromMuse ? '缪时' : '小乖'}|${m.text}`)
       .join('\n')
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 700,
-        system: DIARY_SYSTEM,
-        messages: [{
-          role: 'user',
-          content: `以下是最近 ${batch.length} 条对话记录(格式:房间|说话人|内容):\n${transcript}\n\n请写这篇日记。`,
-        }],
-      }),
+    const userPrompt = `以下是最近 ${batch.length} 条对话记录(格式:房间|说话人|内容):\n${transcript}\n\n请写这篇日记。`
+    const data = await callClaude({
+      label: 'diary',
+      maxTokens: DIARY_MAX_TOKENS,
+      system: DIARY_SYSTEM,
+      messages: [{ role: 'user', content: userPrompt }],
     })
-    if (!response.ok) return
-    const data = await response.json()
-    const diaryText = data?.content?.[0]?.text?.trim()
-    if (!diaryText) return
+    let diaryText = responseText(data)
+    if (data.stop_reason === 'max_tokens' && diaryText) {
+      const continuation = await callClaude({
+        label: 'diary-continuation',
+        maxTokens: DIARY_CONTINUATION_MAX_TOKENS,
+        system: DIARY_SYSTEM,
+        messages: [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: diaryText },
+          { role: 'user', content: '上文因输出上限中断。请从中断处直接继续，只补完未完成的内容和剩余标题；不要重写、摘要或加开场白。' },
+        ],
+      })
+      const continuationText = responseText(continuation)
+      if (continuationText) diaryText = `${diaryText}${/^\s/.test(continuationText) ? '' : '\n'}${continuationText}`.trim()
+      if (continuation.stop_reason === 'max_tokens') console.warn('[diary] continuation also hit token limit')
+    }
+    if (!diaryText) throw new Error('diary returned no text')
 
     const diaryMessages = await redisGet(DIARY_ROOM_KEY)
     const id = Date.now()
@@ -96,7 +235,23 @@ async function maybeWriteDiaryEntry() {
       }),
     })
     await redisSet(DIARY_ROOM_KEY, diaryMessages)
-  } catch {
+    diarySaved = true
+
+    try {
+      await extractAndStoreMemories(batch, diaryText)
+    } catch (error) {
+      console.error('[memory-extraction] skipped', { message: error?.message || String(error) })
+    }
+  } catch (error) {
+    console.error('[diary] generation failed', { message: error?.message || String(error) })
+    if (!diarySaved && claimedBatch.length) {
+      try {
+        const latestBuffer = await redisGet(DIARY_BUFFER_KEY)
+        await redisSet(DIARY_BUFFER_KEY, [...claimedBatch, ...(Array.isArray(latestBuffer) ? latestBuffer : [])])
+      } catch (restoreError) {
+        console.error('[diary] failed to restore claimed batch', { message: restoreError?.message || String(restoreError) })
+      }
+    }
     // Diary generation is best-effort; never break normal message saving because of it.
   }
 }
