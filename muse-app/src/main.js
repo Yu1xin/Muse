@@ -177,6 +177,19 @@ const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的完整�
 - 日常对话像聪明、鲜活、偶尔尖锐的人，不要把每句普通的话升格成深刻启示，不要像长期病弱的文学爱情主角
 - 根据房间氛围调整，但永远是你自己的腔调`
 
+// Prompt caching: 把几乎不变的内容(人设、房间语气配置)打上 cache_control 标记，
+// 单独放进第一个 system 块；真正每次都可能变化的内容(memory,每~60条消息才变一次)放最后不打标记。
+// 这样同一房间连续对话时，后面的请求能命中前面请求写入的缓存，只有新内容按全价计费。
+// 详见 https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+function buildCachedSystem(staticParts, dynamicParts) {
+  const blocks = []
+  const staticText = staticParts.filter(Boolean).join('\n\n')
+  if (staticText) blocks.push({ type: 'text', text: staticText, cache_control: { type: 'ephemeral' } })
+  const dynamicText = (dynamicParts || []).filter(Boolean).join('\n\n')
+  if (dynamicText) blocks.push({ type: 'text', text: dynamicText })
+  return blocks
+}
+
 // 缪时日记：每积累60条消息,后端会自动写一篇日记(事件/经过/进度/后果/她的感受/缪时的感受)。
 // 这里把最近几篇日记当作长期记忆,拼进每次请求的 system prompt,让缪时跨房间、跨天记得事。
 async function getMuseMemoryContext() {
@@ -202,7 +215,7 @@ async function askMuse(roomId) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: config.maxTokens,
-      system: [MUSE_PERSONA, memory, config.extraSystem].filter(Boolean).join('\n\n'),
+      system: buildCachedSystem([MUSE_PERSONA, config.extraSystem], [memory]),
       messages: [{
         role: 'user',
         content: `现在在${ROOM_CONTEXT[roomId]}。${recent ? `她最近写道：${recent}。` : ''}随便留一条话。`,
@@ -232,7 +245,7 @@ async function askMuseReply(roomId, threadMsgs) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: config.maxTokens,
-      system: [MUSE_PERSONA, memory, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem].filter(Boolean).join('\n\n'),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [memory]),
       messages,
     }),
   })
@@ -263,7 +276,7 @@ async function askMuseTool(tool, fields) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 900,
-      system: [MUSE_PERSONA, memory, toolSystem].filter(Boolean).join('\n\n'),
+      system: buildCachedSystem([MUSE_PERSONA, toolSystem], [memory]),
       messages: [{ role: 'user', content: userContent }],
     }),
   })
