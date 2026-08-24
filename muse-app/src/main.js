@@ -75,6 +75,19 @@ async function annotateImageMessage(key, id, visualNote) {
   } catch {}
 }
 
+async function requestEarlyDiary(key) {
+  if (!USE_API) return false
+  try {
+    const res = await fetch(`/api/messages?room=${key}&action=write-diary`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    const data = await res.json()
+    return Boolean(res.ok && data.written)
+  } catch { return false }
+}
+
 async function uploadImage(file) {
   const res = await fetch('/api/media', {
     method: 'POST',
@@ -229,10 +242,12 @@ const AUTONOMY_SYSTEM = `你每次收到小乖的新消息时，有权决定现�
 只依据近期原始对话和提供的当前缪时状态；日记、历史长期记忆和过去的高强度内容不能证明小乖的当前状态。
 明确问题、现实事务或值得稍后认真回答的内容可以选择 defer，但必须在 reply 里给一个简短、像你自己的当下回应，并创建 pending，以后自然接回来。身体危险、强烈求助或明显的关系修复需求必须现在回复。不回复应低频且自然，只适用于内容本身不要求回应的小碎片；不要将沉默当成冷暴力。
 如果当前状态里有 pending，你可以在这次自然回到其中一件；回答后用 resolve 移除。已经失去意义的可以 drop，还没到时候的保持不动。
+你也有权决定这批互动是否已经发生了值得当天写进日记的事件，不需要等到60句。只有真正的转折、共同决定、重要新闻、关系时刻、明确完成的阶段或对你们具有持续意义的小事才选 write_now。普通闲聊、撒娇、每张图片、短暂情绪或为了显得深情而夸大的时刻都选 wait。这个判断是你的，不要向小乖宣布“我要写日记了”。
 回复长度只能是 micro、short、normal、long：micro约1至12个中文字，short约15至45字，normal约50至100字，long约110至180字。这是自然范围，不要截断完整表达。
 只输出下列格式，不要在标签外写任何内容：
-<decision>{"responseDisposition":"reply_now","length":"normal","mood":"更新后的简短情绪","body":"更新后的简短身体感受","energy":68,"relationshipIntensity":72,"pendingActions":[]}</decision>
+<decision>{"responseDisposition":"reply_now","length":"normal","mood":"更新后的简短情绪","body":"更新后的简短身体感受","energy":68,"relationshipIntensity":72,"pendingActions":[],"diaryAction":"wait"}</decision>
 pendingActions 只允许 {"action":"create","topic":"简短主题"}、{"action":"resolve","id":"已有pending id"} 或 {"action":"drop","id":"已有pending id"}。
+diaryAction 只能是 write_now 或 wait。
 <visual_note>只在这条消息有图片、且图中有对日记或未来互动确实有用的明确事实时，写一句不超过80字的客观备注；否则留空。不猜身份、地点、情绪或关系，不写心理解读</visual_note>
 <reply>reply_now 或 defer 时只写缪时对小乖说的话；no_reply 时留空</reply>
 影响、状态和决策理由都是隐藏的，绝不向小乖解释或心理分析。`
@@ -1224,6 +1239,7 @@ async function autoReplyInRoom(roomId, key, threadId) {
     await annotateImageMessage(key, latestUserMessage.id, result.visualNote)
   }
   if (result.shouldReply) await saveMessage(key, result.reply, true, Number(threadId))
+  if (result.decision?.diaryAction === 'write_now') await requestEarlyDiary(key)
   return result.shouldReply
 }
 

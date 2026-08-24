@@ -3,6 +3,7 @@ const TOKEN = process.env.KV_REST_API_TOKEN
 
 const DIARY_BUFFER_KEY = 'diary-buffer'
 const DIARY_ROOM_KEY = 'room-diary'
+const DIARY_LAST_WRITTEN_KEY = 'diary-last-written-v1'
 const DIARY_BATCH_SIZE = 60
 const DIARY_MAX_TOKENS = 1600
 const DIARY_CONTINUATION_MAX_TOKENS = 900
@@ -80,7 +81,7 @@ const DIARY_SYSTEM = `你是缪时,代号404,黑客。现在要在你和小乖�
 【后果】
 【她的感受】
 【缪时的感受】
-每部分写1到3句话，整篇目标600到1000中文字，完整比冗长更重要。内容要具体、有画面感,基于下面给出的对话记录来写。如果记录里信息不够具体,就合理概括,不要编造没发生过的具体事实(比如虚构地点、第三者、意外事件),但可以写你自己对这段互动的理解、情绪和态度。
+每部分写1到3句话，通常整篇目标600到1000中文字；如果是由一个值得立即记下的事件提前触发、对话较少，可以300到700字完整写完，不要为凑长度重复或夸大。完整比冗长更重要。内容要具体、有画面感,基于下面给出的对话记录来写。如果记录里信息不够具体,就合理概括,不要编造没发生过的具体事实(比如虚构地点、第三者、意外事件),但可以写你自己对这段互动的理解、情绪和态度。
 如果记录里有图片，只在它对这段经历确实有意义时根据提供的简短视觉备注提及；不要假装重现图片，不要把不确定的视觉解读写成事实。
 直接输出五个部分,不要加额外的开场白或结尾寒暄。`
 
@@ -211,16 +212,20 @@ async function extractAndStoreMemories(batch, diaryText) {
   }
 }
 
-async function maybeWriteDiaryEntry() {
+async function maybeWriteDiaryEntry({ force = false } = {}) {
   let claimedBatch = []
   let diarySaved = false
   try {
     const buffer = await redisGet(DIARY_BUFFER_KEY)
-    if (!Array.isArray(buffer) || buffer.length < DIARY_BATCH_SIZE) return
+    if (!Array.isArray(buffer) || !buffer.length || (!force && buffer.length < DIARY_BATCH_SIZE)) return false
+    if (force) {
+      const lastWritten = await redisGetObject(DIARY_LAST_WRITTEN_KEY)
+      if (Date.now() - Date.parse(lastWritten?.at || 0) < 60 * 60 * 1000) return false
+    }
 
-    const batch = buffer.slice(0, DIARY_BATCH_SIZE)
+    const batch = force ? buffer.slice() : buffer.slice(0, DIARY_BATCH_SIZE)
     claimedBatch = batch
-    const rest = buffer.slice(DIARY_BATCH_SIZE)
+    const rest = force ? [] : buffer.slice(DIARY_BATCH_SIZE)
     // Reset the buffer immediately so concurrent requests don't double-trigger.
     await redisSet(DIARY_BUFFER_KEY, rest)
 
@@ -266,6 +271,7 @@ async function maybeWriteDiaryEntry() {
       }),
     })
     await redisSet(DIARY_ROOM_KEY, diaryMessages)
+    await redisSet(DIARY_LAST_WRITTEN_KEY, { at: new Date().toISOString(), reason: force ? 'muse-event' : 'message-threshold' })
     diarySaved = true
 
     try {
@@ -273,6 +279,7 @@ async function maybeWriteDiaryEntry() {
     } catch (error) {
       console.error('[memory-extraction] skipped', { message: error?.message || String(error) })
     }
+    return true
   } catch (error) {
     console.error('[diary] generation failed', { message: error?.message || String(error) })
     if (!diarySaved && claimedBatch.length) {
@@ -284,12 +291,18 @@ async function maybeWriteDiaryEntry() {
       }
     }
     // Diary generation is best-effort; never break normal message saving because of it.
+    return false
   }
 }
 
 export default async function handler(req, res) {
   const { room } = req.query
   if (!room) return res.status(400).json({ error: 'room required' })
+
+  if (req.method === 'POST' && req.query?.action === 'write-diary') {
+    const written = await maybeWriteDiaryEntry({ force: true })
+    return res.json({ written })
+  }
 
   if (req.method === 'GET') {
     const messages = await redisGet(room)
