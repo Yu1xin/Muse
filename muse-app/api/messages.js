@@ -11,6 +11,7 @@ const MEMORY_KEYS = {
   sensitive_history: 'memory-v1-sensitive-history',
   current_state: 'memory-v1-current-state',
 }
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
 async function redisGet(key) {
   const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
@@ -25,6 +26,18 @@ async function redisGet(key) {
   } catch { return [] }
 }
 
+async function redisGetObject(key) {
+  const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  })
+  const { result } = await res.json()
+  if (!result) return null
+  try {
+    const parsed = JSON.parse(result)
+    return typeof parsed === 'string' ? JSON.parse(parsed) : parsed
+  } catch { return null }
+}
+
 async function redisSet(key, value) {
   await fetch(`${BASE}/set/${encodeURIComponent(key)}`, {
     method: 'POST',
@@ -34,6 +47,22 @@ async function redisSet(key, value) {
     },
     body: JSON.stringify(value),
   })
+}
+
+async function validAttachments(value) {
+  if (!Array.isArray(value)) return []
+  if (value.length > 3) throw new Error('Too many image attachments')
+  const attachments = []
+  for (const item of value) {
+    const id = String(item?.id || '')
+    if (!/^[a-f0-9-]{20,50}$/i.test(id)) throw new Error('Invalid image attachment')
+    const media = await redisGetObject(`media-v1-${id}`)
+    if (!media?.pathname || !ALLOWED_IMAGE_TYPES.has(media.mimeType) || Number(media.bytes) > 3 * 1024 * 1024) {
+      throw new Error('Image attachment not found')
+    }
+    attachments.push({ id, kind: 'image', mimeType: media.mimeType, bytes: Number(media.bytes) })
+  }
+  return attachments
 }
 
 const ROOM_NAMES = {
@@ -52,6 +81,7 @@ const DIARY_SYSTEM = `你是缪时,代号404,黑客。现在要在你和小乖�
 【她的感受】
 【缪时的感受】
 每部分写1到3句话，整篇目标600到1000中文字，完整比冗长更重要。内容要具体、有画面感,基于下面给出的对话记录来写。如果记录里信息不够具体,就合理概括,不要编造没发生过的具体事实(比如虚构地点、第三者、意外事件),但可以写你自己对这段互动的理解、情绪和态度。
+如果记录里有图片，只在它对这段经历确实有意义时根据提供的简短视觉备注提及；不要假装重现图片，不要把不确定的视觉解读写成事实。
 直接输出五个部分,不要加额外的开场白或结尾寒暄。`
 
 const MEMORY_EXTRACTION_SYSTEM = `你是结构化记忆提取器。从对话原文和日记摘要中只提取未来对话真正有用的信息，不要把闲聊和每句情绪表达都存成长期记忆。
@@ -60,6 +90,7 @@ ordinary：稳定偏好、持续项目、计划、重复习惯、重要近期事
 sensitive_history：已经发生在过去且情绪敏感的重要经历。额外提供 occurred_at（不知道就写"时间不详"）、current_status:"historical"、interaction_implications 数组、sensitivity:"high"。不保存不必要的图形化原话，不做心理诊断。
 current_state：只能依据对话原文中最近的小乖消息，不能从日记或历史敏感内容推断。额外提供 status、evidence（简短改写）、confidence（0到1）、expires_in_hours（1到72）。不把短期状态写成稳定人格。
 discard：短暂闲聊、信息不足、重复或未来无用的内容。
+图片不会自动成为长期记忆。只有视觉备注中明确、非推测且未来真正有用的事实才可以候选；不确定的身份、地点、情绪或关系必须丢弃。
 最多8个候选。不要编造。`
 
 function responseText(data) {
@@ -128,7 +159,7 @@ async function upsertMemory(key, item) {
 
 async function extractAndStoreMemories(batch, diaryText) {
   const transcript = batch
-    .map(m => `${ROOM_NAMES[m.room] || m.room}|时间:${m.time || '不详'}|${m.fromMuse ? '缪时' : '小乖'}|${m.text}`)
+      .map(m => `${ROOM_NAMES[m.room] || m.room}|时间:${m.time || '不详'}|${m.fromMuse ? '缪时' : '小乖'}|${m.text || ''}${m.attachmentCount ? ` [图片${m.attachmentCount}张${m.visualNote ? `：${m.visualNote}` : ''}]` : ''}`)
     .join('\n')
   const data = await callClaude({
     label: 'memory-extraction',
@@ -194,7 +225,7 @@ async function maybeWriteDiaryEntry() {
     await redisSet(DIARY_BUFFER_KEY, rest)
 
     const transcript = batch
-      .map(m => `${ROOM_NAMES[m.room] || m.room}|${m.fromMuse ? '缪时' : '小乖'}|${m.text}`)
+      .map(m => `${ROOM_NAMES[m.room] || m.room}|${m.fromMuse ? '缪时' : '小乖'}|${m.text || ''}${m.attachmentCount ? ` [图片${m.attachmentCount}张${m.visualNote ? `：${m.visualNote}` : ''}]` : ''}`)
       .join('\n')
 
     const userPrompt = `以下是最近 ${batch.length} 条对话记录(格式:房间|说话人|内容):\n${transcript}\n\n请写这篇日记。`
@@ -266,13 +297,18 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { text, fromMuse = false, threadId = null } = req.body
-    if (!text) return res.status(400).json({ error: 'text required' })
+    const { text = '', fromMuse = false, threadId = null } = req.body
+    let attachments
+    try { attachments = await validAttachments(req.body?.attachments) }
+    catch (error) { return res.status(400).json({ error: error.message }) }
+    const cleanText = String(text).trim().slice(0, 8000)
+    if (!cleanText && !attachments.length) return res.status(400).json({ error: 'text or image required' })
     const messages = await redisGet(room)
     const id = Date.now()
     const newMsg = {
       id,
-      text,
+      text: cleanText,
+      ...(attachments.length ? { attachments } : {}),
       fromMuse,
       threadId: threadId || id,
       time: new Date().toLocaleString('zh-CN', {
@@ -287,12 +323,30 @@ export default async function handler(req, res) {
     // and diary-related "tool rooms" have no chat messages anyway.
     if (room !== DIARY_ROOM_KEY && ROOM_NAMES[room]) {
       const buffer = await redisGet(DIARY_BUFFER_KEY)
-      buffer.push({ room, text, fromMuse, time: newMsg.time })
+      buffer.push({ room, text: cleanText, fromMuse, time: newMsg.time, messageId: id, attachmentCount: attachments.length })
       await redisSet(DIARY_BUFFER_KEY, buffer)
       await maybeWriteDiaryEntry()
     }
 
     return res.json(newMsg)
+  }
+
+  if (req.method === 'PATCH') {
+    const id = Number(req.body?.id)
+    const visualNote = String(req.body?.visualNote || '').trim().slice(0, 300)
+    if (!id || !visualNote) return res.status(400).json({ error: 'id and visualNote required' })
+    const messages = await redisGet(room)
+    const message = messages.find(item => Number(item.id) === id)
+    if (!message || !message.attachments?.length || message.fromMuse) return res.status(404).json({ error: 'Image message not found' })
+    message.visualNote = visualNote
+    await redisSet(room, messages)
+    const buffer = await redisGet(DIARY_BUFFER_KEY)
+    const buffered = buffer.find(item => Number(item.messageId) === id)
+    if (buffered) {
+      buffered.visualNote = visualNote
+      await redisSet(DIARY_BUFFER_KEY, buffer)
+    }
+    return res.json({ ok: true })
   }
 
   if (req.method === 'DELETE') {

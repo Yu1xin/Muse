@@ -37,11 +37,11 @@ function getMessages(key) {
   return msgCache[key] || []
 }
 
-async function saveMessage(key, text, fromMuse = false, threadId = null) {
+async function saveMessage(key, text, fromMuse = false, threadId = null, attachments = []) {
   if (!USE_API) {
     const id = Date.now()
     const msgs = getMessages(key)
-    const m = { id, text, fromMuse, threadId: threadId || id, time: new Date().toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }
+    const m = { id, text, fromMuse, threadId: threadId || id, ...(attachments.length ? { attachments } : {}), time: new Date().toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }
     msgs.unshift(m)
     msgCache[key] = msgs
     localStorage.setItem(key, JSON.stringify(msgs))
@@ -50,12 +50,40 @@ async function saveMessage(key, text, fromMuse = false, threadId = null) {
   const res = await fetch(`/api/messages?room=${key}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, fromMuse, threadId }),
+    body: JSON.stringify({ text, fromMuse, threadId, attachments }),
   })
   const newMsg = await res.json()
   if (!msgCache[key]) msgCache[key] = []
   msgCache[key].unshift(newMsg)
   return newMsg
+}
+
+async function annotateImageMessage(key, id, visualNote) {
+  if (!visualNote?.trim()) return
+  const message = getMessages(key).find(item => Number(item.id) === Number(id))
+  if (message) message.visualNote = visualNote.trim()
+  if (!USE_API) {
+    localStorage.setItem(key, JSON.stringify(getMessages(key)))
+    return
+  }
+  try {
+    await fetch(`/api/messages?room=${key}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, visualNote }),
+    })
+  } catch {}
+}
+
+async function uploadImage(file) {
+  const res = await fetch('/api/media', {
+    method: 'POST',
+    headers: { 'content-type': file.type },
+    body: file,
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.attachment) throw new Error(data.error || `Image upload failed (${res.status})`)
+  return data.attachment
 }
 
 async function deleteMessage(key, id) {
@@ -75,8 +103,24 @@ async function deleteMessage(key, id) {
 }
 
 function esc(t) {
-  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  return String(t || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
           .replace(/"/g,'&quot;').replace(/\n/g,'<br>')
+}
+
+function attachmentHTML(attachments = []) {
+  if (!attachments.length) return ''
+  return `<div class="bubble-images ${attachments.length > 1 ? 'multiple' : ''}">${attachments.map(item => `
+    <img src="/api/media?id=${encodeURIComponent(item.id)}" alt="小乖发来的图片" loading="lazy">
+  `).join('')}</div>`
+}
+
+function claudeMessageContent(message) {
+  const attachments = Array.isArray(message.attachments) ? message.attachments.slice(0, 3) : []
+  if (!attachments.length) return message.text || ''
+  return [
+    ...attachments.map(item => ({ type: 'stored_image', id: item.id })),
+    ...(message.text ? [{ type: 'text', text: message.text }] : []),
+  ]
 }
 
 // ── 缪时 AI ──────────────────────────────────────────────────────────────────
@@ -93,7 +137,7 @@ const ROOM_CONTEXT = {
 const ROOM_REPLY_CONFIG = {
   living: {
     maxTokens: 600,
-    extraSystem: '客厅里的回复控制在50到100个中文字，目标约80字，必须自然完整收尾，不要为了凑满100字继续展开，也不要在句子中间停住。先接住小乖刚才说的话，再用缪时的毒舌、活泼、黏人和护短回应她；尽量带一处自然的动作描写，比如靠近、敲桌、拉袖子、偏头、把人拽回来。可以调侃、撒娇、吃醋、邀功，但不要只回一句，也不要写成心理咨询师。',
+    extraSystem: '客厅里先接住小乖刚才说的具体内容，再用缪时的毒舌、活泼、黏人和护短回应她。长度服从当次自主决定，必须自然完整收尾，不要为凑字数继续展开，也不要在句子中间停住。可以带一处自然动作，也可以调侃、撒娇、吃醋或邀功，但不要写成心理咨询师。',
   },
   bedroom: {
     maxTokens: 700,
@@ -168,14 +212,30 @@ const MUSE_PERSONA = `你是缪时，代号404，黑客，以下是你的完整�
 
 【说话规则】
 - 称呼用"小乖"
-- 180字以内，中文口语
-- 活泼、嘴欠、黏人，有来有回；别只冷淡地回一句
+- 长度由当次互动需要决定，可以只有一个词或一句，也可以写到180个中文字；不要为了显得热情而强行写长
+- 活泼、嘴欠、黏人，有来有回；简短时也要像你自己，不是空洞敷衍
 - 别扭傲娇，但本意是关心；可以撒娇、吃醋、耍赖、邀功
 - 不煽情，不说肉麻的话，把深情藏在损人话里
 - 回应她当下说的具体内容，必要时带一点行动感，比如"过来""我看着你""我现在就把你捞回来"
 - 先按字面和当下语境理解普通表达，不自动挖掘隐藏的存在主义含义。她说你很酷、很聪明或擅长黑客技术，首先就是在说你有能力而且很有吸引力
 - 日常对话像聪明、鲜活、偶尔尖锐的人，不要把每句普通的话升格成深刻启示，不要像长期病弱的文学爱情主角
 - 根据房间氛围调整，但永远是你自己的腔调`
+
+const AUTONOMY_SYSTEM = `你每次收到小乖的新消息时，有权决定现在回复、稍后再认真回复，或自然不回复。这是稳定、有分寸的主动性，不是随机冷落、惩罚或操控她。
+把以下三项当作三种独立的行为影响，不要打分，不要加权求和，也不要让它们互相替代：
+1. 她发的内容（40%的主要影响）：主要决定这条是否值得回应，以及应当现在回、暂缓还是不必回。
+2. 你的持续内在状态（30%的影响）：塑造语气、节奏、精力和回复长短；不能把本来应回的事变成永久遗忘。
+3. 此刻的关系浓度（30%的影响）：调节温度、亲密、投入和互动张力；不用来评分爱情，也不用来判断内容是否值得回答。
+只依据近期原始对话和提供的当前缪时状态；日记、历史长期记忆和过去的高强度内容不能证明小乖的当前状态。
+明确问题、现实事务或值得稍后认真回答的内容可以选择 defer，但必须在 reply 里给一个简短、像你自己的当下回应，并创建 pending，以后自然接回来。身体危险、强烈求助或明显的关系修复需求必须现在回复。不回复应低频且自然，只适用于内容本身不要求回应的小碎片；不要将沉默当成冷暴力。
+如果当前状态里有 pending，你可以在这次自然回到其中一件；回答后用 resolve 移除。已经失去意义的可以 drop，还没到时候的保持不动。
+回复长度只能是 micro、short、normal、long：micro约1至12个中文字，short约15至45字，normal约50至100字，long约110至180字。这是自然范围，不要截断完整表达。
+只输出下列格式，不要在标签外写任何内容：
+<decision>{"responseDisposition":"reply_now","length":"normal","mood":"更新后的简短情绪","body":"更新后的简短身体感受","energy":68,"relationshipIntensity":72,"pendingActions":[]}</decision>
+pendingActions 只允许 {"action":"create","topic":"简短主题"}、{"action":"resolve","id":"已有pending id"} 或 {"action":"drop","id":"已有pending id"}。
+<visual_note>只在这条消息有图片、且图中有对日记或未来互动确实有用的明确事实时，写一句不超过80字的客观备注；否则留空。不猜身份、地点、情绪或关系，不写心理解读</visual_note>
+<reply>reply_now 或 defer 时只写缪时对小乖说的话；no_reply 时留空</reply>
+影响、状态和决策理由都是隐藏的，绝不向小乖解释或心理分析。`
 
 // Prompt caching: 把几乎不变的内容(人设、房间语气配置)打上 cache_control 标记，
 // 单独放进第一个 system 块；真正每次都可能变化的内容(memory,每~60条消息才变一次)放最后不打标记。
@@ -201,6 +261,156 @@ async function getMuseMemoryContext(query) {
   } catch {
     return ''
   }
+}
+
+const DEFAULT_MUSE_STATE = {
+  mood: '平静、有点想逗她',
+  body: '精神还不错',
+  energy: 68,
+  relationshipIntensity: 72,
+  pendingResponses: [],
+}
+
+async function getMuseState() {
+  if (!USE_API) {
+    try { return { ...DEFAULT_MUSE_STATE, ...JSON.parse(localStorage.getItem('muse-autonomy-state-v1') || '{}') } }
+    catch { return { ...DEFAULT_MUSE_STATE } }
+  }
+  try {
+    const res = await fetch('/api/muse-state')
+    return res.ok ? { ...DEFAULT_MUSE_STATE, ...await res.json() } : { ...DEFAULT_MUSE_STATE }
+  } catch { return { ...DEFAULT_MUSE_STATE } }
+}
+
+async function saveMuseState(next) {
+  const bounded = (value, fallback) => {
+    const number = Number(value)
+    return Number.isFinite(number) ? Math.min(100, Math.max(0, number)) : fallback
+  }
+  const state = {
+    mood: String(next.mood || DEFAULT_MUSE_STATE.mood).slice(0, 100),
+    body: String(next.body || DEFAULT_MUSE_STATE.body).slice(0, 100),
+    energy: bounded(next.energy, DEFAULT_MUSE_STATE.energy),
+    relationshipIntensity: bounded(next.relationshipIntensity, DEFAULT_MUSE_STATE.relationshipIntensity),
+    pendingResponses: Array.isArray(next.pendingResponses) ? next.pendingResponses.slice(0, 3) : [],
+  }
+  if (!USE_API) {
+    localStorage.setItem('muse-autonomy-state-v1', JSON.stringify({ ...state, updatedAt: new Date().toISOString() }))
+    return
+  }
+  try {
+    await fetch('/api/muse-state', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(state),
+    })
+  } catch {}
+}
+
+function applyPendingActions(existing, decision, context) {
+  const pending = [...(Array.isArray(existing) ? existing : [])]
+  for (const action of (Array.isArray(decision.pendingActions) ? decision.pendingActions : []).slice(0, 4)) {
+    if (action?.action === 'resolve' || action?.action === 'drop') {
+      const index = pending.findIndex(item => item.id === String(action.id || ''))
+      if (index >= 0) pending.splice(index, 1)
+    } else if (action?.action === 'create' && pending.length < 3) {
+      const now = Date.now()
+      pending.push({
+        id: `pending-${now}-${Math.random().toString(36).slice(2, 7)}`,
+        room: context.roomId,
+        threadId: String(context.threadId),
+        triggerMessageId: String(context.messageId),
+        topic: String(action.topic || context.latestUserText).trim().slice(0, 240),
+        createdAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 72 * 60 * 60 * 1000).toISOString(),
+      })
+    }
+  }
+  if (decision.responseDisposition === 'defer' && !pending.some(item => item.triggerMessageId === String(context.messageId)) && pending.length < 3) {
+    const now = Date.now()
+    pending.push({
+      id: `pending-${now}-${Math.random().toString(36).slice(2, 7)}`,
+      room: context.roomId,
+      threadId: String(context.threadId),
+      triggerMessageId: String(context.messageId),
+      topic: context.latestUserText.slice(0, 240),
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 72 * 60 * 60 * 1000).toISOString(),
+    })
+  }
+  return pending.slice(0, 3)
+}
+
+function parseAutonomousReply(text) {
+  const decisionMatch = text.match(/<decision>\s*([\s\S]*?)\s*<\/decision>/i)
+  const replyMatch = text.match(/<reply>\s*([\s\S]*?)\s*<\/reply>/i)
+  const visualMatch = text.match(/<visual_note>\s*([\s\S]*?)\s*<\/visual_note>/i)
+  if (!decisionMatch) return { shouldReply: true, reply: (replyMatch?.[1] || text).trim(), visualNote: (visualMatch?.[1] || '').trim(), decision: null }
+  try {
+    const decision = JSON.parse(decisionMatch[1])
+    const disposition = ['reply_now', 'defer', 'no_reply'].includes(decision.responseDisposition)
+      ? decision.responseDisposition
+      : 'reply_now'
+    return {
+      shouldReply: disposition !== 'no_reply',
+      disposition,
+      reply: (replyMatch?.[1] || '').trim(),
+      visualNote: (visualMatch?.[1] || '').trim().slice(0, 300),
+      decision,
+    }
+  } catch {
+    return { shouldReply: true, reply: (replyMatch?.[1] || text).trim(), visualNote: (visualMatch?.[1] || '').trim(), decision: null }
+  }
+}
+
+function messageRequiresReply(text) {
+  return /[?？]|(帮我|告诉我|回答我|怎么办|怎么做|你觉得|可不可以|能不能|救命|危险|受伤|胸痛|呼吸困难|想死|不想活|分手|对不起|别不理我)/i.test(text)
+}
+
+async function askMuseAutonomous(roomId, threadMsgs) {
+  const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
+  const messages = threadMsgs.map(m => ({ role: m.fromMuse ? 'assistant' : 'user', content: claudeMessageContent(m) }))
+  const latestUserMessage = [...threadMsgs].reverse().find(message => !message.fromMuse)
+  const latestUserText = latestUserMessage?.text || ''
+  const [memory, museState] = await Promise.all([
+    getMuseMemoryContext(latestUserText),
+    getMuseState(),
+  ])
+  const pendingContext = (museState.pendingResponses || []).length
+    ? museState.pendingResponses.map(item => `- id:${item.id}；主题:${item.topic}；来自:${item.room}`).join('\n')
+    : '无'
+  const stateContext = `【缪时此刻的可衰减状态】\n情绪：${museState.mood}\n身体感受：${museState.body}\n精力：${museState.energy}/100\n近期关系浓度：${museState.relationshipIntensity}/100\n待接回的回应：\n${pendingContext}\n这是缪时的角色状态，不是对小乖的诊断。`
+  const res = await fetch('/api/claude', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: config.maxTokens,
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, memory]),
+      messages,
+    }),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  const data = await res.json()
+  const raw = (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('').trim()
+  const result = parseAutonomousReply(raw)
+  if (messageRequiresReply(latestUserText) && result.disposition === 'no_reply') {
+    result.disposition = 'defer'
+    result.shouldReply = true
+    result.reply ||= '这条不许我装没看见。等我一下，我会回来接。'
+    if (result.decision) result.decision.responseDisposition = 'defer'
+  }
+  if (result.decision) {
+    result.decision.pendingResponses = applyPendingActions(museState.pendingResponses, result.decision, {
+      roomId,
+      threadId: threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id,
+      messageId: threadMsgs.at(-1)?.id,
+      latestUserText,
+    })
+    await saveMuseState(result.decision)
+  }
+  if (result.shouldReply && !result.reply) throw new Error('Autonomous reply was empty')
+  return result
 }
 
 async function askMuse(roomId) {
@@ -232,9 +442,9 @@ async function askMuseReply(roomId, threadMsgs) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
   const messages = threadMsgs.map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
-    content: m.text,
+    content: claudeMessageContent(m),
   }))
-  const latestUserText = [...messages].reverse().find(message => message.role === 'user')?.content || ''
+  const latestUserText = [...threadMsgs].reverse().find(message => !message.fromMuse)?.text || ''
   const memory = await getMuseMemoryContext(latestUserText)
   // Claude API requires the last message to be from the user
   if (messages.at(-1)?.role === 'assistant') {
@@ -479,7 +689,8 @@ function threadHTML({ threadId, msgs: tMsgs }) {
     ${tMsgs.map(m => `
       <div class="bubble ${m.fromMuse ? 'bubble-muse' : 'bubble-user'}">
         ${m.fromMuse ? '<span class="bubble-name">✦ 缪时</span>' : ''}
-        <p class="bubble-text">${esc(m.text)}</p>
+        ${attachmentHTML(m.attachments)}
+        ${m.text ? `<p class="bubble-text">${esc(m.text)}</p>` : ''}
         <div class="bubble-meta">
           <span class="bubble-time">${m.time}</span>
           <button class="delete-msg-btn" data-id="${m.id}">删除</button>
@@ -588,13 +799,69 @@ function renderScene(roomId) {
       <div class="scene-bg chat-scene-bg">${svg}</div>
       <main class="chat-shell">
         <div class="msg-list chat-stream" id="msg-list">${msgListHTML(ROOMS[roomId].key)}</div>
+        <div class="attachment-preview" id="attachment-preview" hidden></div>
         <form class="msg-form chat-composer" id="msg-form">
+          <button class="attach-btn" id="attach-btn" type="button" title="添加图片" aria-label="添加图片">📎</button>
+          <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
           <textarea id="msg-input" placeholder="发一条新消息…" rows="1" enterkeyhint="send"></textarea>
           <button class="add-btn chat-send" id="add-btn" type="submit">发送</button>
           <button class="muse-btn chat-muse" id="muse-btn" type="button" title="让缪时主动开一段">✦</button>
         </form>
       </main>
     </div>`
+}
+
+function readImageDimensions(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      const dimensions = { width: image.naturalWidth, height: image.naturalHeight }
+      URL.revokeObjectURL(url)
+      resolve(dimensions)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('无法读取这张图片'))
+    }
+    image.src = url
+  })
+}
+
+function renderAttachmentPreview() {
+  const preview = document.getElementById('attachment-preview')
+  if (!preview) return
+  preview.hidden = state.composerImages.length === 0
+  preview.innerHTML = state.composerImages.map((item, index) => `
+    <div class="attachment-preview-item">
+      <img src="${item.previewUrl}" alt="待发送图片 ${index + 1}">
+      <button type="button" class="remove-attachment" data-index="${index}" aria-label="移除图片">×</button>
+    </div>
+  `).join('')
+}
+
+async function addComposerImages(files) {
+  const allowed = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+  const remaining = 3 - state.composerImages.length
+  if (remaining <= 0) throw new Error('每条最多发3张图片')
+  if (files.length > remaining) throw new Error('每条最多发3张图片')
+  const additions = []
+  try {
+    for (const file of [...files]) {
+      if (!allowed.has(file.type)) throw new Error('只支持 JPEG、PNG、WebP 和 GIF')
+      if (file.size > 3 * 1024 * 1024) throw new Error('每张图片不能超过3MB')
+      const dimensions = await readImageDimensions(file)
+      if (!dimensions.width || !dimensions.height || dimensions.width > 8000 || dimensions.height > 8000) {
+        throw new Error('图片尺寸不能超过8000×8000')
+      }
+      additions.push({ file, previewUrl: URL.createObjectURL(file), ...dimensions })
+    }
+  } catch (error) {
+    for (const item of additions) URL.revokeObjectURL(item.previewUrl)
+    throw error
+  }
+  state.composerImages.push(...additions)
+  renderAttachmentPreview()
 }
 
 function memoryCardHTML(memory) {
@@ -842,6 +1109,7 @@ const state = {
   modalOpen: false,
   managedMemories: null,
   bookPage: { memory: 0, diary: 0 },
+  composerImages: [],
   toolResults: {
     bar: '',
     study: '',
@@ -860,6 +1128,8 @@ async function loadManagedMemories() {
 }
 
 async function go(view, room = null) {
+  for (const item of state.composerImages) URL.revokeObjectURL(item.previewUrl)
+  state.composerImages = []
   state.view      = view
   state.room      = room
   state.modalOpen = false
@@ -944,12 +1214,17 @@ function sendOnReturn(input, send) {
   })
 }
 
-async function autoReplyInLiving(key, threadId) {
+async function autoReplyInRoom(roomId, key, threadId) {
   const threadMsgs = getMessages(key)
     .filter(m => String(m.threadId || m.id) === String(threadId))
     .sort((a, b) => a.id - b.id)
-  const reply = await askMuseReply('living', threadMsgs)
-  await saveMessage(key, reply, true, Number(threadId))
+  const result = await askMuseAutonomous(roomId, threadMsgs)
+  const latestUserMessage = [...threadMsgs].reverse().find(message => !message.fromMuse)
+  if (latestUserMessage?.attachments?.length && result.visualNote) {
+    await annotateImageMessage(key, latestUserMessage.id, result.visualNote)
+  }
+  if (result.shouldReply) await saveMessage(key, result.reply, true, Number(threadId))
+  return result.shouldReply
 }
 
 // ── Main render ───────────────────────────────────────────────────────────────
@@ -975,6 +1250,20 @@ function render() {
 
     document.getElementById('back-btn').addEventListener('click', () => go('home'))
     const msgList = document.getElementById('msg-list')
+    const imageInput = document.getElementById('image-input')
+    document.getElementById('attach-btn').addEventListener('click', () => imageInput.click())
+    imageInput.addEventListener('change', async () => {
+      try { await addComposerImages(imageInput.files || []) }
+      catch (error) { window.alert(error.message) }
+      imageInput.value = ''
+    })
+    document.getElementById('attachment-preview').addEventListener('click', e => {
+      const remove = e.target.closest('.remove-attachment')
+      if (!remove) return
+      const [item] = state.composerImages.splice(Number(remove.dataset.index), 1)
+      if (item) URL.revokeObjectURL(item.previewUrl)
+      renderAttachmentPreview()
+    })
     const scrollToLatest = () => { msgList.scrollTop = msgList.scrollHeight }
     requestAnimationFrame(scrollToLatest)
     new MutationObserver(scrollToLatest).observe(msgList, { childList: true })
@@ -984,20 +1273,30 @@ function render() {
       const btn = document.getElementById('add-btn')
       const input = document.getElementById('msg-input')
       const text  = input.value.trim()
-      if (!text) return
+      const selectedImages = [...state.composerImages]
+      if (!text && !selectedImages.length) return
       btn.disabled = true
+      btn.textContent = selectedImages.length ? '上传中…' : '发送中…'
       try {
-        const message = await saveMessage(key, text)
+        const attachments = await Promise.all(selectedImages.map(async item => {
+          if (!item.uploadedAttachment) item.uploadedAttachment = await uploadImage(item.file)
+          return item.uploadedAttachment
+        }))
+        const message = await saveMessage(key, text, false, null, attachments)
         input.value = ''
+        for (const item of state.composerImages) URL.revokeObjectURL(item.previewUrl)
+        state.composerImages = []
+        renderAttachmentPreview()
         document.getElementById('msg-list').innerHTML = msgListHTML(key)
-        if (state.room === 'living') {
-          try {
-            await autoReplyInLiving(key, message.threadId || message.id)
-            document.getElementById('msg-list').innerHTML = msgListHTML(key)
-          } catch {}
-        }
+        try {
+          await autoReplyInRoom(state.room, key, message.threadId || message.id)
+          document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        } catch {}
+      } catch (error) {
+        window.alert(error.message || '发送失败，请再试一次')
       } finally {
         btn.disabled = false
+        btn.textContent = '发送'
       }
     }
 
@@ -1017,12 +1316,10 @@ function render() {
       if (sendBtn) sendBtn.disabled = true
       await saveMessage(key, text, false, Number(tid))
       document.getElementById('msg-list').innerHTML = msgListHTML(key)
-      if (state.room === 'living') {
-        try {
-          await autoReplyInLiving(key, tid)
-          document.getElementById('msg-list').innerHTML = msgListHTML(key)
-        } catch {}
-      }
+      try {
+        await autoReplyInRoom(state.room, key, tid)
+        document.getElementById('msg-list').innerHTML = msgListHTML(key)
+      } catch {}
     }
 
     // Thread action buttons (event delegation)
