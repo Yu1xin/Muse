@@ -663,6 +663,197 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   font-weight: 600;
 }
 
+/* ── Continuous chat rooms ── */
+.chat-page {
+  background: #0b0710;
+}
+
+.chat-scene-bg {
+  opacity: 0.24;
+  filter: saturate(0.72);
+}
+
+.chat-page::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(9,5,14,0.55), rgba(9,5,14,0.88) 42%, #0b0710 100%);
+  pointer-events: none;
+}
+
+.chat-shell {
+  position: absolute;
+  z-index: 12;
+  inset: 58px 0 0;
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  margin: 0 auto;
+  background: rgba(11,7,16,0.42);
+  backdrop-filter: blur(8px);
+}
+
+.chat-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 14px 24px;
+  scroll-behavior: smooth;
+}
+
+.chat-stream .thread-group {
+  background: transparent;
+  border: none;
+  padding: 7px 2px 10px;
+  gap: 8px;
+}
+
+.chat-stream .bubble {
+  border-radius: 16px;
+  max-width: min(82%, 560px);
+  padding: 10px 13px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.16);
+}
+
+.chat-stream .bubble-user {
+  background: linear-gradient(135deg, rgba(148,31,81,0.92), rgba(107,24,71,0.94));
+  border-color: rgba(208,86,132,0.35);
+  border-bottom-right-radius: 5px;
+}
+
+.chat-stream .bubble-muse {
+  background: rgba(39,27,51,0.94);
+  border-color: rgba(128,89,154,0.35);
+  border-bottom-left-radius: 5px;
+}
+
+.chat-stream .thread-actions {
+  border: 0;
+  padding: 0 4px 5px;
+  opacity: 0.8;
+}
+
+.chat-current-label {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 2px;
+  margin: 8px auto 4px;
+}
+
+.chat-composer {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px max(12px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  border-top: 1px solid rgba(87,62,99,0.55);
+  background: rgba(18,12,25,0.96);
+  backdrop-filter: blur(18px);
+}
+
+.chat-composer #msg-input {
+  min-height: 44px;
+  max-height: 120px;
+  border-radius: 20px;
+  padding: 9px 14px;
+}
+
+.chat-send,
+.chat-muse {
+  flex: 0 0 auto;
+  height: 44px;
+  min-width: 52px;
+  border-radius: 22px;
+  padding: 0 16px;
+}
+
+.chat-muse {
+  min-width: 44px;
+  width: 44px;
+  padding: 0;
+  font-size: 17px;
+}
+
+.pajama-pile {
+  margin: 2px 0 14px;
+  border: 1px solid rgba(104,68,121,0.42);
+  border-radius: 16px;
+  background: rgba(27,18,35,0.72);
+  overflow: hidden;
+}
+
+.pajama-pile summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  cursor: pointer;
+  padding: 13px 15px;
+  color: #d3b4df;
+}
+
+.pajama-pile summary::-webkit-details-marker { display: none; }
+.pajama-pile summary strong { display: block; font-size: 13px; letter-spacing: 2px; }
+.pajama-pile summary small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; }
+.pile-icon { font-size: 19px; transition: transform 0.2s; }
+.pajama-pile[open] .pile-icon { transform: rotate(45deg); }
+.pile-threads { padding: 4px 12px 12px; border-top: 1px solid rgba(87,62,99,0.35); }
+.pile-threads .thread-group + .thread-group { border-top: 1px dashed rgba(87,62,99,0.4); padding-top: 16px; }
+
+/* ── Structured memory cabinet ── */
+.memory-admin-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #24112f 0%, #100b16 42%, #0b0810 100%);
+}
+
+.memory-admin-inner {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 24px 14px 64px;
+}
+
+.memory-admin-intro {
+  padding: 18px;
+  border: 1px solid rgba(132,82,154,0.34);
+  border-radius: 16px;
+  background: rgba(29,18,38,0.8);
+  margin-bottom: 20px;
+}
+
+.memory-admin-intro h2 { font-size: 19px; margin-bottom: 8px; }
+.memory-admin-intro p { color: #aa9ab5; font-size: 13px; line-height: 1.75; }
+.memory-admin-intro small { display: block; color: #c28d70; margin-top: 10px; }
+
+.memory-admin-section { margin-top: 24px; }
+.memory-section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 0 3px; }
+.memory-section-heading h3 { font-size: 15px; letter-spacing: 1px; }
+.memory-section-heading p { color: var(--text-muted); font-size: 11px; margin-top: 4px; }
+.memory-section-heading > span { display: grid; place-items: center; min-width: 28px; height: 28px; border-radius: 14px; background: #321641; color: #d4aee5; font-size: 12px; }
+.memory-admin-list { display: flex; flex-direction: column; gap: 10px; }
+
+.memory-admin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(25,18,33,0.92);
+}
+
+.memory-admin-meta { color: #a47bb8; font-size: 10px; letter-spacing: 1px; }
+.memory-admin-card input,
+.memory-admin-card textarea { font-size: 14px; }
+.memory-title-input { font-weight: 700; }
+.memory-admin-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.memory-save-btn,
+.memory-delete-btn { border-radius: 8px; padding: 8px 12px; font-family: inherit; cursor: pointer; }
+.memory-save-btn { border: 1px solid #674078; background: #2a1635; color: #d5b5e2; }
+.memory-delete-btn { border: 1px solid #5e2937; background: transparent; color: #c78094; }
+.memory-save-btn:disabled,
+.memory-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ── Room page (book) ── */
 .room-page {
   display: flex;

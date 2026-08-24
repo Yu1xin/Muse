@@ -19,6 +19,42 @@ async function redisGet(key) {
   } catch { return [] }
 }
 
+async function redisSet(key, value) {
+  const response = await fetch(`${BASE}/set/${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(value),
+  })
+  if (!response.ok) throw new Error(`KV write failed with ${response.status}`)
+}
+
+function memoryKey(type) {
+  return MEMORY_KEYS[type] || null
+}
+
+function publicMemory(memory) {
+  return {
+    id: memory.id,
+    type: memory.type,
+    title: memory.title,
+    summary: memory.summary,
+    retrieval_tags: memory.retrieval_tags || [],
+    occurred_at: memory.occurred_at || null,
+    current_status: memory.current_status || null,
+    interaction_implications: memory.interaction_implications || [],
+    sensitivity: memory.sensitivity || null,
+    status: memory.status || null,
+    evidence: memory.evidence || null,
+    confidence: memory.confidence ?? null,
+    created_at: memory.created_at || null,
+    updated_at: memory.updated_at || null,
+    expires_at: memory.expires_at || null,
+  }
+}
+
 function terms(text) {
   const normalized = String(text || '').toLowerCase().replace(/\s+/g, '')
   const chunks = new Set()
@@ -64,8 +100,41 @@ function formatContext(ordinary, historical, current) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
   try {
+    if (req.method === 'PATCH') {
+      const { id, type, title, summary, retrieval_tags = [], interaction_implications, status, evidence } = req.body || {}
+      const key = memoryKey(type)
+      if (!key || !id) return res.status(400).json({ error: 'Valid type and id are required' })
+      const memories = await redisGet(key)
+      const index = memories.findIndex(memory => memory.id === id)
+      if (index < 0) return res.status(404).json({ error: 'Memory not found' })
+      memories[index] = {
+        ...memories[index],
+        title: String(title ?? memories[index].title).trim().slice(0, 160),
+        summary: String(summary ?? memories[index].summary).trim().slice(0, 800),
+        retrieval_tags: Array.isArray(retrieval_tags) ? retrieval_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8) : memories[index].retrieval_tags,
+        ...(interaction_implications !== undefined ? { interaction_implications: Array.isArray(interaction_implications) ? interaction_implications.map(item => String(item).trim()).filter(Boolean).slice(0, 8) : [] } : {}),
+        ...(status !== undefined ? { status: String(status).trim().slice(0, 240) } : {}),
+        ...(evidence !== undefined ? { evidence: String(evidence).trim().slice(0, 400) } : {}),
+        updated_at: new Date().toISOString(),
+      }
+      if (!memories[index].title || !memories[index].summary) return res.status(400).json({ error: 'Title and summary cannot be empty' })
+      await redisSet(key, memories)
+      return res.json({ memory: publicMemory(memories[index]) })
+    }
+
+    if (req.method === 'DELETE') {
+      const { id, type } = req.body || {}
+      const key = memoryKey(type)
+      if (!key || !id) return res.status(400).json({ error: 'Valid type and id are required' })
+      const memories = await redisGet(key)
+      const next = memories.filter(memory => memory.id !== id)
+      if (next.length === memories.length) return res.status(404).json({ error: 'Memory not found' })
+      await redisSet(key, next)
+      return res.json({ ok: true })
+    }
+
+    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
     const query = String(req.query?.query || '').slice(0, 1000)
     const [ordinaryRaw, historicalRaw, currentRaw] = await Promise.all([
       redisGet(MEMORY_KEYS.ordinary),
@@ -74,6 +143,14 @@ export default async function handler(req, res) {
     ])
     const now = Date.now()
     const activeCurrent = (Array.isArray(currentRaw) ? currentRaw : []).filter(item => Date.parse(item.expires_at) > now)
+    if (req.query?.mode === 'manage') {
+      return res.json({
+        ordinary: (Array.isArray(ordinaryRaw) ? ordinaryRaw : []).sort(newestFirst).map(publicMemory),
+        sensitive_history: (Array.isArray(historicalRaw) ? historicalRaw : []).sort(newestFirst).map(publicMemory),
+        current_state: activeCurrent.sort(newestFirst).map(publicMemory),
+        expired_current_count: Math.max(0, (Array.isArray(currentRaw) ? currentRaw.length : 0) - activeCurrent.length),
+      })
+    }
     const current = pickRelevant(activeCurrent, query, 3, 1)
     const ordinary = pickRelevant(Array.isArray(ordinaryRaw) ? ordinaryRaw : [], query, 5, 1)
     const historical = pickRelevant(Array.isArray(historicalRaw) ? historicalRaw : [], query, 2, 2)

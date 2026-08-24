@@ -474,34 +474,44 @@ function groupThreads(msgs) {
   return order.map(tid => ({ threadId: tid, msgs: map.get(tid).reverse() }))
 }
 
+function threadHTML({ threadId, msgs: tMsgs }) {
+  return `<div class="thread-group" data-thread="${threadId}">
+    ${tMsgs.map(m => `
+      <div class="bubble ${m.fromMuse ? 'bubble-muse' : 'bubble-user'}">
+        ${m.fromMuse ? '<span class="bubble-name">✦ 缪时</span>' : ''}
+        <p class="bubble-text">${esc(m.text)}</p>
+        <div class="bubble-meta">
+          <span class="bubble-time">${m.time}</span>
+          <button class="delete-msg-btn" data-id="${m.id}">删除</button>
+        </div>
+      </div>`).join('')}
+    <div class="thread-actions">
+      <button class="thread-btn t-muse-btn" data-thread="${threadId}">缪时来说</button>
+      <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
+    </div>
+    <div class="thread-inline" id="ir-${threadId}" hidden>
+      <textarea class="inline-input" placeholder="说点什么…" rows="2" enterkeyhint="send"></textarea>
+      <div class="inline-row">
+        <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
+        <button class="t-send-btn" data-thread="${threadId}">发送</button>
+      </div>
+    </div>
+  </div>`
+}
+
 function msgListHTML(key) {
   const msgs = getMessages(key)
-  if (!msgs.length) return '<p class="empty">还没有留言，来写第一条吧</p>'
-
-  return groupThreads(msgs).map(({ threadId, msgs: tMsgs }) =>
-    `<div class="thread-group">
-      ${tMsgs.map(m => `
-        <div class="bubble ${m.fromMuse ? 'bubble-muse' : 'bubble-user'}">
-          ${m.fromMuse ? '<span class="bubble-name">✦ 缪时</span>' : ''}
-          <p class="bubble-text">${esc(m.text)}</p>
-          <div class="bubble-meta">
-            <span class="bubble-time">${m.time}</span>
-            <button class="delete-msg-btn" data-id="${m.id}">删除</button>
-          </div>
-        </div>`).join('')}
-      <div class="thread-actions">
-        <button class="thread-btn t-muse-btn" data-thread="${threadId}">缪时来说</button>
-        <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
-      </div>
-      <div class="thread-inline" id="ir-${threadId}" hidden>
-        <textarea class="inline-input" placeholder="说点什么…" rows="2" enterkeyhint="send"></textarea>
-        <div class="inline-row">
-          <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
-          <button class="t-send-btn" data-thread="${threadId}">发送</button>
-        </div>
-      </div>
-    </div>`
-  ).join('')
+  if (!msgs.length) return '<p class="empty chat-empty">还没有聊天，从第一句开始吧</p>'
+  const threads = groupThreads(msgs)
+  const current = threads[0]
+  const older = threads.slice(1).reverse()
+  return `${older.length ? `
+    <details class="pajama-pile">
+      <summary><span class="pile-icon">◇</span><span><strong>缪时的睡衣</strong><small>${older.length} 段收好的聊天</small></span></summary>
+      <div class="pile-threads">${older.map(threadHTML).join('')}</div>
+    </details>` : ''}
+    <div class="chat-current-label">最近</div>
+    ${threadHTML(current)}`
 }
 
 
@@ -538,6 +548,12 @@ function renderHome() {
           </div>
           <span class="scene-label">缪时日记</span>
         </button>
+        <button class="scene-card" data-room="memory-manager">
+          <div class="scene-thumb memory-manager-thumb">
+            <span class="book-cover-icon">🧠</span>
+          </div>
+          <span class="scene-label">长期记忆</span>
+        </button>
         <button class="scene-card" data-room="study">
           <div class="scene-thumb study-thumb">
             <span class="book-cover-icon">📚</span>
@@ -562,30 +578,69 @@ function renderHome() {
 
 function renderScene(roomId) {
   const svg  = roomId === 'living' ? svgLiving() : svgBedroom()
-  const hint = roomId === 'living' ? '点击茶几上的星星瓶' : '点击床头的台灯'
   return `
-    <div class="scene-page">
+    <div class="scene-page chat-page">
       <header class="scene-header">
         <button class="back-btn" id="back-btn">‹</button>
         <span class="scene-title">${ROOMS[roomId].name}</span>
       </header>
-      <div class="scene-bg">${svg}</div>
-      <p class="scene-hint" id="scene-hint">${hint}</p>
-
-      <!-- Slide-up modal -->
-      <div class="msg-modal" id="msg-modal">
-        <div class="msg-handle"></div>
-        <form class="msg-form" id="msg-form">
-          <textarea id="msg-input" placeholder="写点什么…" rows="3" enterkeyhint="send"></textarea>
-          <div class="btn-row">
-            <button class="add-btn" id="add-btn" type="submit">添加留言</button>
-            <button class="muse-btn" id="muse-btn" type="button">✦ 让缪时写一条</button>
-          </div>
+      <div class="scene-bg chat-scene-bg">${svg}</div>
+      <main class="chat-shell">
+        <div class="msg-list chat-stream" id="msg-list">${msgListHTML(ROOMS[roomId].key)}</div>
+        <form class="msg-form chat-composer" id="msg-form">
+          <textarea id="msg-input" placeholder="发一条新消息…" rows="1" enterkeyhint="send"></textarea>
+          <button class="add-btn chat-send" id="add-btn" type="submit">发送</button>
+          <button class="muse-btn chat-muse" id="muse-btn" type="button" title="让缪时主动开一段">✦</button>
         </form>
-        <div class="msg-list" id="msg-list">${msgListHTML(ROOMS[roomId].key)}</div>
-      </div>
-      <div class="modal-back" id="modal-back"></div>
+      </main>
     </div>`
+}
+
+function memoryCardHTML(memory) {
+  const tags = (memory.retrieval_tags || []).join('，')
+  const meta = memory.type === 'sensitive_history'
+    ? `HISTORICAL · ${memory.occurred_at || '时间不详'}`
+    : memory.type === 'current_state'
+      ? `有效至 ${memory.expires_at || '未知'}`
+      : `更新于 ${memory.updated_at || memory.created_at || '未知'}`
+  return `<article class="memory-admin-card" data-memory-id="${esc(memory.id)}" data-memory-type="${memory.type}">
+    <div class="memory-admin-meta">${esc(meta)}</div>
+    <input class="memory-title-input" value="${esc(memory.title || '')}" aria-label="记忆标题">
+    <textarea class="memory-summary-input" rows="4" aria-label="记忆摘要">${esc(memory.summary || '')}</textarea>
+    <input class="memory-tags-input" value="${esc(tags)}" placeholder="检索标签，用逗号分开" aria-label="检索标签">
+    ${memory.type === 'current_state' ? `<textarea class="memory-status-input" rows="2" aria-label="当前状态">${esc(memory.status || '')}</textarea>` : ''}
+    <div class="memory-admin-actions">
+      <button class="memory-save-btn">保存修改</button>
+      <button class="memory-delete-btn">删除</button>
+    </div>
+  </article>`
+}
+
+function renderMemoryManager() {
+  const data = state.managedMemories
+  const sections = [
+    ['ordinary', '普通长期记忆', '偏好、项目、计划、习惯和关系时刻'],
+    ['sensitive_history', '历史敏感记忆', '始终标记为过去，不代表当前状态'],
+    ['current_state', '当前状态', '只显示仍在有效期内的短期状态'],
+  ]
+  return `<div class="memory-admin-page">
+    <header class="room-header">
+      <button class="back-btn" id="back-btn">‹ 返回</button>
+      <span class="room-header-name">长期记忆</span>
+    </header>
+    <main class="memory-admin-inner">
+      <div class="memory-admin-intro">
+        <h2>缪时会记得的事</h2>
+        <p>缪时每次只会想起少量相关内容，不会一次读完全部记忆。你可以在这里校正或删除它们。</p>
+        ${data?.expired_current_count ? `<small>${data.expired_current_count} 条已过期当前状态已自动停止检索。</small>` : ''}
+      </div>
+      ${!data ? '<p class="empty">正在打开记忆柜…</p>' : sections.map(([key, title, description]) => `
+        <section class="memory-admin-section">
+          <div class="memory-section-heading"><div><h3>${title}</h3><p>${description}</p></div><span>${(data[key] || []).length}</span></div>
+          <div class="memory-admin-list">${(data[key] || []).length ? data[key].map(memoryCardHTML).join('') : '<p class="empty">这一层还没有记忆。</p>'}</div>
+        </section>`).join('')}
+    </main>
+  </div>`
 }
 
 function renderBook(roomId) {
@@ -767,12 +822,23 @@ const state = {
   view: 'home',
   room: null,
   modalOpen: false,
+  managedMemories: null,
   bookPage: { memory: 0, diary: 0 },
   toolResults: {
     bar: '',
     study: '',
     fitness: '',
   },
+}
+
+async function loadManagedMemories() {
+  if (!USE_API) {
+    state.managedMemories = { ordinary: [], sensitive_history: [], current_state: [], expired_current_count: 0 }
+    return
+  }
+  const res = await fetch('/api/memories?mode=manage')
+  if (!res.ok) throw new Error(`Memory API ${res.status}`)
+  state.managedMemories = await res.json()
 }
 
 async function go(view, room = null) {
@@ -784,6 +850,10 @@ async function go(view, room = null) {
   if (room && ROOMS[room]) await loadMessages(ROOMS[room].key)
   if (view === 'memory') await loadMessages(ROOMS.memory.key)
   if (view === 'diary') await loadMessages(ROOMS.diary.key)
+  if (view === 'memory-manager') {
+    state.managedMemories = null
+    try { await loadManagedMemories() } catch { state.managedMemories = { ordinary: [], sensitive_history: [], current_state: [], expired_current_count: 0, loadError: true } }
+  }
   render()
 }
 
@@ -875,6 +945,7 @@ function render() {
       btn.addEventListener('click', () => {
         const r = btn.dataset.room
         if (r === 'memory' || r === 'diary') go(r)
+        else if (r === 'memory-manager') go('memory-manager')
         else if (r === 'bar' || r === 'study' || r === 'fitness') go(r)
         else go('scene', r)
       })
@@ -885,12 +956,10 @@ function render() {
     const key = ROOMS[state.room].key
 
     document.getElementById('back-btn').addEventListener('click', () => go('home'))
-
-    // Hotspot
-    document.getElementById('scene-hotspot').addEventListener('click', openModal)
-
-    // Modal close
-    document.getElementById('modal-back').addEventListener('click', closeModal)
+    const msgList = document.getElementById('msg-list')
+    const scrollToLatest = () => { msgList.scrollTop = msgList.scrollHeight }
+    requestAnimationFrame(scrollToLatest)
+    new MutationObserver(scrollToLatest).observe(msgList, { childList: true })
 
     // Save message
     async function submitSceneMessage() {
@@ -939,7 +1008,6 @@ function render() {
     }
 
     // Thread action buttons (event delegation)
-    const msgList = document.getElementById('msg-list')
     msgList.addEventListener('keydown', async (e) => {
       const input = e.target.closest('.inline-input')
       if (!input || e.shiftKey) return
@@ -1027,16 +1095,47 @@ function render() {
       btn.textContent = '✦ 让缪时写一条'
     })
 
-    // Auto-hide hint
-    setTimeout(() => {
-      const h = document.getElementById('scene-hint')
-      if (h) h.style.opacity = '0'
-    }, 3500)
-
-    if (state.modalOpen) {
-      document.getElementById('msg-modal')?.classList.add('open')
-      document.getElementById('modal-back')?.classList.add('open')
-    }
+  } else if (state.view === 'memory-manager') {
+    app.innerHTML = renderMemoryManager()
+    document.getElementById('back-btn').addEventListener('click', () => go('home'))
+    const page = document.querySelector('.memory-admin-inner')
+    page?.addEventListener('click', async event => {
+      const card = event.target.closest('.memory-admin-card')
+      if (!card) return
+      const type = card.dataset.memoryType
+      const id = card.dataset.memoryId
+      const saveBtn = event.target.closest('.memory-save-btn')
+      const deleteBtn = event.target.closest('.memory-delete-btn')
+      if (saveBtn) {
+        saveBtn.disabled = true
+        saveBtn.textContent = '保存中…'
+        const body = {
+          type,
+          id,
+          title: card.querySelector('.memory-title-input')?.value || '',
+          summary: card.querySelector('.memory-summary-input')?.value || '',
+          retrieval_tags: (card.querySelector('.memory-tags-input')?.value || '').split(/[,，]/).map(tag => tag.trim()).filter(Boolean),
+        }
+        const statusInput = card.querySelector('.memory-status-input')
+        if (statusInput) body.status = statusInput.value
+        try {
+          const res = await fetch('/api/memories', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+          if (!res.ok) throw new Error(`API ${res.status}`)
+          saveBtn.textContent = '已保存 ✓'
+          setTimeout(() => { saveBtn.disabled = false; saveBtn.textContent = '保存修改' }, 1200)
+        } catch {
+          saveBtn.disabled = false
+          saveBtn.textContent = '保存失败，重试'
+        }
+      }
+      if (deleteBtn) {
+        if (!window.confirm('删除这条长期记忆吗？')) return
+        deleteBtn.disabled = true
+        const res = await fetch('/api/memories', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, id }) })
+        if (!res.ok) { deleteBtn.disabled = false; return }
+        card.remove()
+      }
+    })
 
   } else if (state.view === 'memory') {
     app.innerHTML = renderBook('memory')
