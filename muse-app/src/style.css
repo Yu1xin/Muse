@@ -937,6 +937,11 @@ input[type="text"]::placeholder { color: var(--text-muted); }
 .book-top {
   padding: 14px 18px 8px 28px;
   border-bottom: 1px solid #ddd6c4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  z-index: 4;
 }
 
 .page-label {
@@ -945,6 +950,50 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   letter-spacing: 1.5px;
   font-family: serif;
 }
+
+.diary-toc summary {
+  color: #765442;
+  cursor: pointer;
+  font-family: serif;
+  font-size: 12px;
+  letter-spacing: 2px;
+  list-style: none;
+  padding: 3px 5px;
+}
+
+.diary-toc summary::-webkit-details-marker { display: none; }
+
+.diary-toc-list {
+  background: #f2eadb;
+  border: 1px solid #cdbda5;
+  border-radius: 7px;
+  box-shadow: 0 10px 24px rgba(49, 30, 17, 0.24);
+  display: flex;
+  flex-direction: column;
+  max-height: min(360px, 60vh);
+  min-width: 158px;
+  overflow-y: auto;
+  padding: 6px;
+  position: absolute;
+  right: 12px;
+  top: calc(100% - 2px);
+}
+
+.diary-toc-item {
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: #5f4637;
+  cursor: pointer;
+  font-family: serif;
+  font-size: 13px;
+  padding: 9px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.diary-toc-item:hover { background: rgba(130, 88, 56, 0.1); }
+.diary-toc-item.active { background: #dccbb3; color: #3e281b; font-weight: 600; }
 
 .page-body {
   flex: 1;

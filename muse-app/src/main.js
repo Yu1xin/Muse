@@ -656,6 +656,14 @@ function renderBook(roomId) {
   const isWrite = !isDiary && pg === 0
   const isEmpty = isDiary && total === 0
   const thread = threads[pg - 1] || null
+  const diaryDate = (item, index) => {
+    const raw = item?.msgs?.[0]?.time || ''
+    const parsed = new Date(raw)
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    }
+    return raw.split(/[\s,]/)[0] || `第 ${index + 1} 页`
+  }
 
   return `
     <div class="room-page">
@@ -672,6 +680,15 @@ function renderBook(roomId) {
                 : isEmpty
                   ? '<span class="page-label">还没有日记</span>'
                   : `<span class="page-label">第 ${pg} 页 &nbsp;/&nbsp; 共 ${total} 页</span>`}
+              ${isDiary && !isEmpty ? `
+                <details class="diary-toc" id="diary-toc">
+                  <summary>目录</summary>
+                  <div class="diary-toc-list">
+                    ${threads.map((item, index) => `
+                      <button class="diary-toc-item ${pg === index + 1 ? 'active' : ''}" data-page="${index + 1}">${esc(diaryDate(item, index))}</button>
+                    `).join('')}
+                  </div>
+                </details>` : ''}
             </div>
             <div class="page-body" id="page-body">
               ${isWrite ? `
@@ -1245,6 +1262,13 @@ function render() {
     document.getElementById('back-btn').addEventListener('click', () => go('home'))
     document.getElementById('btn-older')?.addEventListener('click', () => flipBook('older', 'diary'))
     document.getElementById('btn-newer')?.addEventListener('click', () => flipBook('newer', 'diary'))
+
+    document.getElementById('diary-toc')?.addEventListener('click', e => {
+      const item = e.target.closest('.diary-toc-item')
+      if (!item) return
+      state.bookPage.diary = Number(item.dataset.page)
+      render()
+    })
 
     document.getElementById('page-body')?.addEventListener('click', async (e) => {
       const key = ROOMS.diary.key
