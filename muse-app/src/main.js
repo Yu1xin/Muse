@@ -505,9 +505,10 @@ function msgListHTML(key) {
   const threads = groupThreads(msgs)
   const current = threads[0]
   const older = threads.slice(1).reverse()
+  const pileName = key === ROOMS.bedroom.key ? '缪时的睡衣口袋' : '缪时的笔记本'
   return `${older.length ? `
     <details class="pajama-pile">
-      <summary><span class="pile-icon">◇</span><span><strong>缪时的睡衣</strong><small>${older.length} 段收好的聊天</small></span></summary>
+      <summary><span class="pile-icon">◇</span><span><strong>${pileName}</strong><small>${older.length} 段收好的聊天</small></span></summary>
       <div class="pile-threads">${older.map(threadHTML).join('')}</div>
     </details>` : ''}
     <div class="chat-current-label">最近</div>
@@ -550,7 +551,7 @@ function renderHome() {
         </button>
         <button class="scene-card" data-room="memory-manager">
           <div class="scene-thumb memory-manager-thumb">
-            <span class="book-cover-icon">🧠</span>
+            <span class="book-cover-icon">❤️</span>
           </div>
           <span class="scene-label">长期记忆</span>
         </button>

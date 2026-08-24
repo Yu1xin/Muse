@@ -702,6 +702,10 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   scroll-behavior: smooth;
 }
 
+.chat-stream > * {
+  flex-shrink: 0;
+}
+
 .chat-stream .thread-group {
   background: transparent;
   border: none;
@@ -776,6 +780,7 @@ input[type="text"]::placeholder { color: var(--text-muted); }
 }
 
 .pajama-pile {
+  flex: none;
   margin: 2px 0 14px;
   border: 1px solid rgba(104,68,121,0.42);
   border-radius: 16px;
