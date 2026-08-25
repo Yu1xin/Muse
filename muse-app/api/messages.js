@@ -2,9 +2,11 @@ const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
 
 const DIARY_BUFFER_KEY = 'diary-buffer'
+const MEMORY_BUFFER_KEY = 'memory-extraction-buffer-v1'
 const DIARY_ROOM_KEY = 'room-diary'
 const DIARY_LAST_WRITTEN_KEY = 'diary-last-written-v1'
 const DIARY_BATCH_SIZE = 60
+const MEMORY_BATCH_SIZE = 20
 const DIARY_MAX_TOKENS = 1600
 const DIARY_CONTINUATION_MAX_TOKENS = 900
 const MEMORY_KEYS = {
@@ -158,7 +160,7 @@ async function upsertMemory(key, item) {
   await redisSet(key, memories.slice(0, 250))
 }
 
-async function extractAndStoreMemories(batch, diaryText) {
+async function extractAndStoreMemories(batch, diaryText = '') {
   const transcript = batch
       .map(m => `${ROOM_NAMES[m.room] || m.room}|时间:${m.time || '不详'}|${m.fromMuse ? '缪时' : '小乖'}|${m.text || ''}${m.attachmentCount ? ` [图片${m.attachmentCount}张${m.visualNote ? `：${m.visualNote}` : ''}]` : ''}`)
     .join('\n')
@@ -175,6 +177,7 @@ async function extractAndStoreMemories(batch, diaryText) {
   const parsed = parseJsonObject(responseText(data))
   const candidates = Array.isArray(parsed.candidates) ? parsed.candidates.slice(0, 8) : []
   const now = new Date()
+  let storedCount = 0
   for (const candidate of candidates) {
     if (!candidate || candidate.type === 'discard' || !MEMORY_KEYS[candidate.type]) continue
     const base = {
@@ -197,6 +200,7 @@ async function extractAndStoreMemories(batch, diaryText) {
         interaction_implications: cleanStringArray(candidate.interaction_implications),
         sensitivity: 'high',
       })
+      storedCount += 1
     } else if (candidate.type === 'current_state') {
       const hours = Math.min(72, Math.max(1, Number(candidate.expires_in_hours) || 24))
       await upsertMemory(MEMORY_KEYS.current_state, {
@@ -206,9 +210,43 @@ async function extractAndStoreMemories(batch, diaryText) {
         confidence: Math.min(1, Math.max(0, Number(candidate.confidence) || 0)),
         expires_at: new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString(),
       })
+      storedCount += 1
     } else {
       await upsertMemory(MEMORY_KEYS.ordinary, base)
+      storedCount += 1
     }
+  }
+  return storedCount
+}
+
+async function removeClaimedMemoryMessages(batch) {
+  const claimedIds = new Set(batch.map(item => String(item.messageId || '')).filter(Boolean))
+  if (!claimedIds.size) return
+  const buffer = await redisGet(MEMORY_BUFFER_KEY)
+  if (!Array.isArray(buffer)) return
+  await redisSet(MEMORY_BUFFER_KEY, buffer.filter(item => !claimedIds.has(String(item.messageId || ''))))
+}
+
+async function maybeExtractMemoryBatch() {
+  let claimedBatch = []
+  try {
+    const buffer = await redisGet(MEMORY_BUFFER_KEY)
+    if (!Array.isArray(buffer) || buffer.length < MEMORY_BATCH_SIZE) return false
+    claimedBatch = buffer.slice(0, MEMORY_BATCH_SIZE)
+    await redisSet(MEMORY_BUFFER_KEY, buffer.slice(MEMORY_BATCH_SIZE))
+    await extractAndStoreMemories(claimedBatch)
+    return true
+  } catch (error) {
+    console.error('[memory-extraction] batch failed', { message: error?.message || String(error) })
+    if (claimedBatch.length) {
+      try {
+        const latestBuffer = await redisGet(MEMORY_BUFFER_KEY)
+        await redisSet(MEMORY_BUFFER_KEY, [...claimedBatch, ...(Array.isArray(latestBuffer) ? latestBuffer : [])])
+      } catch (restoreError) {
+        console.error('[memory-extraction] failed to restore claimed batch', { message: restoreError?.message || String(restoreError) })
+      }
+    }
+    return false
   }
 }
 
@@ -276,6 +314,7 @@ async function maybeWriteDiaryEntry({ force = false } = {}) {
 
     try {
       await extractAndStoreMemories(batch, diaryText)
+      await removeClaimedMemoryMessages(batch)
     } catch (error) {
       console.error('[memory-extraction] skipped', { message: error?.message || String(error) })
     }
@@ -340,9 +379,14 @@ export default async function handler(req, res) {
     // and diary-related "tool rooms" have no chat messages anyway.
     if (room !== DIARY_ROOM_KEY && ROOM_NAMES[room] && kind !== 'status') {
       const buffer = await redisGet(DIARY_BUFFER_KEY)
-      buffer.push({ room, text: cleanText, fromMuse, time: newMsg.time, messageId: id, attachmentCount: attachments.length })
+      const memoryBuffer = await redisGet(MEMORY_BUFFER_KEY)
+      const bufferedMessage = { room, text: cleanText, fromMuse, time: newMsg.time, messageId: id, attachmentCount: attachments.length }
+      buffer.push(bufferedMessage)
+      memoryBuffer.push(bufferedMessage)
       await redisSet(DIARY_BUFFER_KEY, buffer)
+      await redisSet(MEMORY_BUFFER_KEY, memoryBuffer)
       await maybeWriteDiaryEntry()
+      await maybeExtractMemoryBatch()
     }
 
     return res.json(newMsg)

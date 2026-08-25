@@ -90,7 +90,7 @@ ordinary 只收录稳定偏好、重要关系事实、持续项目、共同设�
 sensitive_history 只收录明确已发生且将来互动需要谨慎知道的敏感经历，并额外提供 occurred_at 和 interaction_implications。
 不得输出 current_state，不得把当时的情绪当成稳定人格，不得心理诊断，不得凭旧记忆推断现在仍如此。
 日记可能有文学化总结或缪时的主观语气；优先保留明确事实，不要将推测写成事实。缪时说的话不能自动当成 Yuxin 的自述。
-宁可少存，不要滥存。每批最多 12 条，不要输出解释。`
+宁可少存，不要滥存。每批最多 12 条，不要输出解释。输出必须能被 JSON.parse 直接解析，字符串内容中的双引号必须正确转义。`
 
 async function extract(chunk, index, total) {
   const payload = JSON.stringify({
@@ -204,7 +204,15 @@ await Promise.all([
 console.info(`Backup created: ${backupPrefix}-*`)
 
 const candidates = []
-for (let index = 0; index < chunks.length; index += 1) candidates.push(...await extract(chunks[index], index + 1, chunks.length))
+for (let index = 0; index < chunks.length; index += 1) {
+  try {
+    candidates.push(...await extract(chunks[index], index + 1, chunks.length))
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    console.warn('Batch ' + (index + 1) + ' returned invalid JSON; retrying once')
+    candidates.push(...await extract(chunks[index], index + 1, chunks.length))
+  }
+}
 const now = new Date().toISOString()
 const normalized = candidates.map(candidate => normalize(candidate, now)).filter(Boolean)
 const ordinaryAdditions = normalized.filter(item => item.type === 'ordinary')
