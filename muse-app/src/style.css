@@ -553,6 +553,21 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   align-self: flex-start;
 }
 
+.bubble-status {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.72;
+  padding-block: 3px;
+}
+
+.bubble-status .bubble-text {
+  color: inherit;
+  font-size: 13px;
+}
+
 .bubble-name {
   font-size: 11px;
   color: #c8a0e8;

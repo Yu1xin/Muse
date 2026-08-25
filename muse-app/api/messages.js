@@ -311,10 +311,13 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     const { text = '', fromMuse = false, threadId = null } = req.body
+    const kind = req.body?.kind === 'status' && fromMuse ? 'status' : 'message'
     let attachments
     try { attachments = await validAttachments(req.body?.attachments) }
     catch (error) { return res.status(400).json({ error: error.message }) }
-    const cleanText = String(text).trim().slice(0, 8000)
+    const cleanText = kind === 'status'
+      ? Array.from(String(text).trim()).slice(0, 10).join('')
+      : String(text).trim().slice(0, 8000)
     if (!cleanText && !attachments.length) return res.status(400).json({ error: 'text or image required' })
     const messages = await redisGet(room)
     const id = Date.now()
@@ -323,6 +326,7 @@ export default async function handler(req, res) {
       text: cleanText,
       ...(attachments.length ? { attachments } : {}),
       fromMuse,
+      ...(kind === 'status' ? { kind } : {}),
       threadId: threadId || id,
       time: new Date().toLocaleString('zh-CN', {
         year: 'numeric', month: '2-digit', day: '2-digit',
@@ -334,7 +338,7 @@ export default async function handler(req, res) {
 
     // Feed the global diary buffer (skip the diary room itself to avoid feedback loops)
     // and diary-related "tool rooms" have no chat messages anyway.
-    if (room !== DIARY_ROOM_KEY && ROOM_NAMES[room]) {
+    if (room !== DIARY_ROOM_KEY && ROOM_NAMES[room] && kind !== 'status') {
       const buffer = await redisGet(DIARY_BUFFER_KEY)
       buffer.push({ room, text: cleanText, fromMuse, time: newMsg.time, messageId: id, attachmentCount: attachments.length })
       await redisSet(DIARY_BUFFER_KEY, buffer)
