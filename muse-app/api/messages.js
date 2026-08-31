@@ -7,6 +7,7 @@ const DIARY_ROOM_KEY = 'room-diary'
 const DIARY_LAST_WRITTEN_KEY = 'diary-last-written-v1'
 const DIARY_BATCH_SIZE = 60
 const MEMORY_BATCH_SIZE = 20
+const CONVERSATION_SUMMARY_BATCH_SIZE = 30
 const DIARY_MAX_TOKENS = 1600
 const DIARY_CONTINUATION_MAX_TOKENS = 900
 const MEMORY_KEYS = {
@@ -14,7 +15,15 @@ const MEMORY_KEYS = {
   sensitive_history: 'memory-v1-sensitive-history',
   current_state: 'memory-v1-current-state',
 }
+const MEMORY_FOLDER_NAMES = new Set(['高中', 'UNC', '纽约', '国内', '日常', '学习和工作'])
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+
+const CONVERSATION_SUMMARY_SYSTEM = `你是缪时的短期对话压缩器。把恰好30条原始消息写成一段独立、简洁、准确的近期印象，供缪时继续当前这一次聊天。
+保留正在讨论的主题、未完成的问题、双方刚作出的决定、必要的语气与关系动态；删掉逐句复述、重复动作和无关细节。
+不做心理分析，不把普通烦恼升级成风险，不从旧内容推断用户当前状态。摘要最多500个中文字。
+只输出：<summary>摘要正文</summary><keywords>5到12个简短语义关键词，用|分隔</keywords>`
+
+const SUMMARY_ROUTER_SYSTEM = `根据当前消息，从旧对话摘要索引中选择语义相关的摘要。只输出相关摘要的 id，用英文逗号分隔；没有相关项就输出 NONE。不要解释。最多选择2项。`
 
 async function redisGet(key) {
   const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
@@ -88,7 +97,7 @@ const DIARY_SYSTEM = `你是缪时,代号404,黑客。现在要在你和小乖�
 直接输出五个部分,不要加额外的开场白或结尾寒暄。`
 
 const MEMORY_EXTRACTION_SYSTEM = `你是结构化记忆提取器。从对话原文和日记摘要中只提取未来对话真正有用的信息，不要把闲聊和每句情绪表达都存成长期记忆。
-只输出合法JSON，格式为 {"candidates":[...]} 。每个候选必须有 type，dedupe_key，title，summary，retrieval_tags。type 只能是 ordinary、sensitive_history、current_state 或 discard。
+只输出合法JSON，格式为 {"candidates":[...]} 。每个候选必须有 type，dedupe_key，title，summary，retrieval_tags，folder。type 只能是 ordinary、sensitive_history、current_state 或 discard。folder 只能是 高中、UNC、纽约、国内、日常、学习和工作；选择最贴近未来检索方式的一类。
 ordinary：稳定偏好、持续项目、计划、重复习惯、重要近期事件、关系时刻或之后仍有用的了解。
 sensitive_history：已经发生在过去且情绪敏感的重要经历。额外提供 occurred_at（不知道就写"时间不详"）、current_status:"historical"、interaction_implications 数组、sensitivity:"high"。不保存不必要的图形化原话，不做心理诊断。
 current_state：只能依据对话原文中最近的小乖消息，不能从日记或历史敏感内容推断。额外提供 status、evidence（简短改写）、confidence（0到1）、expires_in_hours（1到72）。不把短期状态写成稳定人格。
@@ -133,6 +142,103 @@ async function callClaude({ label, maxTokens, system, messages }) {
   logClaudeUsage(label, data, maxTokens, response.status)
   if (!response.ok) throw new Error(`${label} failed with API ${response.status}: ${data?.error?.message || 'unknown error'}`)
   return data
+}
+
+function conversationSummaryKey(room, threadId) {
+  return `conversation-summary-v1-${room}-${String(threadId).replace(/[^a-z0-9_-]/gi, '').slice(0, 100)}`
+}
+
+async function maybeSummarizeThread(room, threadId) {
+  if (!ROOM_NAMES[room] || !threadId) return false
+  const messages = await redisGet(room)
+  const thread = messages
+    .filter(item => item.kind !== 'status' && String(item.threadId || item.id) === String(threadId))
+    .sort((a, b) => Number(a.id) - Number(b.id))
+  const key = conversationSummaryKey(room, threadId)
+  const existing = await redisGetObject(key)
+  const chunks = Array.isArray(existing?.chunks) ? existing.chunks : []
+  const uncovered = thread.filter(item => Number(item.id) > Number(existing?.coveredThrough || 0))
+  if (uncovered.length < CONVERSATION_SUMMARY_BATCH_SIZE) return false
+  const batch = uncovered.slice(0, CONVERSATION_SUMMARY_BATCH_SIZE)
+  const transcript = batch.map(item => `${item.fromMuse ? '缪时' : '小乖'}：${item.text || '[图片]'}`).join('\n')
+  const data = await callClaude({
+    label: 'conversation-summary',
+    maxTokens: 800,
+    system: CONVERSATION_SUMMARY_SYSTEM,
+    messages: [{
+      role: 'user',
+      content: `这一个独立 chunk 的30条消息：\n${transcript}`,
+    }],
+  })
+  const output = responseText(data)
+  const summary = (output.match(/<summary>\s*([\s\S]*?)\s*<\/summary>/i)?.[1] || output).trim()
+  const keywords = (output.match(/<keywords>\s*([\s\S]*?)\s*<\/keywords>/i)?.[1] || '')
+    .split('|').map(item => item.trim()).filter(Boolean).slice(0, 12)
+  if (!summary) throw new Error('conversation summary returned no text')
+  await redisSet(key, {
+    chunks: [...chunks, {
+      id: `chunk-${batch[0].id}-${batch.at(-1).id}`,
+      startId: batch[0].id,
+      endId: batch.at(-1).id,
+      summary: summary.slice(0, 1200),
+      keywords,
+      createdAt: new Date().toISOString(),
+    }].slice(-80),
+    coveredThrough: batch.at(-1).id,
+    coveredCount: Number(existing?.coveredCount || 0) + batch.length,
+    updatedAt: new Date().toISOString(),
+  })
+  return true
+}
+
+function summaryTerms(text) {
+  const normalized = String(text || '').toLowerCase().replace(/\s+/g, '')
+  const result = new Set()
+  for (let index = 0; index < normalized.length - 1; index += 1) result.add(normalized.slice(index, index + 2))
+  return result
+}
+
+function chunkRelevance(chunk, queryTerms) {
+  const haystack = summaryTerms([chunk.summary, ...(chunk.keywords || [])].join(' '))
+  let score = 0
+  for (const term of queryTerms) if (haystack.has(term)) score += 1
+  return score
+}
+
+async function selectSummaryChunks(chunks, query) {
+  if (!chunks.length) return []
+  const latest = chunks.at(-1)
+  const older = chunks.slice(0, -1)
+  const queryTerms = summaryTerms(query)
+  const lexical = older
+    .map(chunk => ({ chunk, score: chunkRelevance(chunk, queryTerms) }))
+    .filter(item => item.score >= 2)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map(item => item.chunk)
+  let semantic = []
+  if (query?.trim() && lexical.length < 2 && older.length) {
+    try {
+      const index = older.slice(-20).map(chunk => `${chunk.id}|${(chunk.keywords || []).join('、')}|${chunk.summary.slice(0, 180)}`).join('\n')
+      const data = await callClaude({
+        label: 'summary-semantic-router',
+        maxTokens: 100,
+        system: SUMMARY_ROUTER_SYSTEM,
+        messages: [{ role: 'user', content: `当前消息：${query.slice(0, 500)}\n\n摘要索引：\n${index}` }],
+      })
+      const ids = new Set(responseText(data).split(',').map(item => item.trim()).filter(item => item && item !== 'NONE'))
+      semantic = older.filter(chunk => ids.has(chunk.id)).slice(-2)
+    } catch (error) {
+      console.error('[summary-semantic-router] failed', { message: error?.message || String(error) })
+    }
+  }
+  return [...new Map([...lexical, ...semantic, latest].map(chunk => [chunk.id, chunk])).values()].slice(-3)
+}
+
+async function summarizePendingThread(room, threadId) {
+  let batches = 0
+  while (batches < 4 && await maybeSummarizeThread(room, threadId)) batches += 1
+  return batches
 }
 
 function parseJsonObject(text) {
@@ -187,6 +293,7 @@ async function extractAndStoreMemories(batch, diaryText = '') {
       title: String(candidate.title || '').trim().slice(0, 160),
       summary: String(candidate.summary || '').trim().slice(0, 800),
       retrieval_tags: cleanStringArray(candidate.retrieval_tags),
+      folder: MEMORY_FOLDER_NAMES.has(candidate.folder) ? candidate.folder : '日常',
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
       source: 'conversation-segment',
@@ -343,6 +450,27 @@ export default async function handler(req, res) {
     return res.json({ written })
   }
 
+  if (req.method === 'POST' && req.query?.action === 'maintain') {
+    const threadId = req.body?.threadId
+    const first = await Promise.allSettled([
+      summarizePendingThread(room, threadId),
+      maybeWriteDiaryEntry({ force: req.body?.writeDiaryNow === true }),
+    ])
+    const memory = await Promise.allSettled([maybeExtractMemoryBatch()])
+    return res.json({ ok: true, completed: [...first, ...memory].map(result => result.status) })
+  }
+
+  if (req.method === 'GET' && req.query?.action === 'context') {
+    const summaryState = await redisGetObject(conversationSummaryKey(room, req.query?.threadId))
+    const chunks = await selectSummaryChunks(Array.isArray(summaryState?.chunks) ? summaryState.chunks : [], String(req.query?.query || ''))
+    return res.json({
+      summaries: chunks.map(chunk => ({ id: chunk.id, summary: chunk.summary, keywords: chunk.keywords || [] })),
+      summary: chunks.map(chunk => chunk.summary).join('\n\n'),
+      coveredThrough: Number(summaryState?.coveredThrough || 0),
+      coveredCount: Number(summaryState?.coveredCount || 0),
+    })
+  }
+
   if (req.method === 'GET') {
     const messages = await redisGet(room)
     return res.json(messages)
@@ -385,8 +513,6 @@ export default async function handler(req, res) {
       memoryBuffer.push(bufferedMessage)
       await redisSet(DIARY_BUFFER_KEY, buffer)
       await redisSet(MEMORY_BUFFER_KEY, memoryBuffer)
-      await maybeWriteDiaryEntry()
-      await maybeExtractMemoryBatch()
     }
 
     return res.json(newMsg)

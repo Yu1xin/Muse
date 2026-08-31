@@ -922,6 +922,19 @@ input[type="text"]::placeholder { color: var(--text-muted); }
 .memory-admin-intro p { color: #aa9ab5; font-size: 13px; line-height: 1.75; }
 .memory-admin-intro small { display: block; color: #c28d70; margin-top: 10px; }
 
+.memory-folder-index {
+  background: rgba(30, 18, 42, 0.72);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 10px 12px;
+}
+
+.memory-folder-index summary { color: var(--text); cursor: pointer; }
+.memory-folder-index p { margin-top: 8px; }
+
 .memory-admin-section { margin-top: 24px; }
 .memory-section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 0 3px; }
 .memory-section-heading h3 { font-size: 15px; letter-spacing: 1px; }

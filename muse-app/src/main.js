@@ -75,19 +75,6 @@ async function annotateImageMessage(key, id, visualNote) {
   } catch {}
 }
 
-async function requestEarlyDiary(key) {
-  if (!USE_API) return false
-  try {
-    const res = await fetch(`/api/messages?room=${key}&action=write-diary`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    })
-    const data = await res.json()
-    return Boolean(res.ok && data.written)
-  } catch { return false }
-}
-
 async function uploadImage(file) {
   const res = await fetch('/api/media', {
     method: 'POST',
@@ -255,7 +242,7 @@ status 只在 no_reply 时填写：用“#”开头，总长不超过10个字，
 影响、状态和决策理由都是隐藏的，绝不向小乖解释或心理分析。`
 
 // Prompt caching: 把几乎不变的内容(人设、房间语气配置)打上 cache_control 标记，
-// 单独放进第一个 system 块；真正每次都可能变化的内容(memory,每~60条消息才变一次)放最后不打标记。
+// 单独放进第一个 system 块；每次可能变化的状态、滚动摘要与相关记忆放最后不打标记。
 // 这样同一房间连续对话时，后面的请求能命中前面请求写入的缓存，只有新内容按全价计费。
 // 详见 https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 function buildCachedSystem(staticParts, dynamicParts) {
@@ -278,6 +265,24 @@ async function getMuseMemoryContext(query) {
   } catch {
     return ''
   }
+}
+
+async function getConversationContext(roomId, threadId, query = '') {
+  if (!USE_API) return { summary: '', coveredThrough: 0 }
+  try {
+    const room = ROOMS[roomId]?.key
+    const res = await fetch(`/api/messages?room=${encodeURIComponent(room)}&action=context&threadId=${encodeURIComponent(threadId)}&query=${encodeURIComponent(query.slice(0, 500))}`)
+    return res.ok ? await res.json() : { summary: '', coveredThrough: 0 }
+  } catch { return { summary: '', coveredThrough: 0 } }
+}
+
+function requestBackgroundMaintenance(key, threadId, writeDiaryNow = false) {
+  if (!USE_API) return
+  fetch(`/api/messages?room=${encodeURIComponent(key)}&action=maintain`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ threadId, writeDiaryNow }),
+  }).catch(() => {})
 }
 
 const DEFAULT_MUSE_STATE = {
@@ -392,13 +397,18 @@ function messageRequiresReply(text) {
 
 async function askMuseAutonomous(roomId, threadMsgs) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const messages = threadMsgs.map(m => ({ role: m.fromMuse ? 'assistant' : 'user', content: claudeMessageContent(m) }))
   const latestUserMessage = [...threadMsgs].reverse().find(message => !message.fromMuse)
   const latestUserText = latestUserMessage?.text || ''
-  const [memory, museState] = await Promise.all([
+  const threadId = threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id
+  const [memory, museState, conversationContext] = await Promise.all([
     getMuseMemoryContext(latestUserText),
     getMuseState(),
+    getConversationContext(roomId, threadId, latestUserText),
   ])
+  const messages = threadMsgs
+    .filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0))
+    .slice(-30)
+    .map(message => ({ role: message.fromMuse ? 'assistant' : 'user', content: claudeMessageContent(message) }))
   const pendingContext = (museState.pendingResponses || []).length
     ? museState.pendingResponses.map(item => `- id:${item.id}；主题:${item.topic}；来自:${item.room}`).join('\n')
     : '无'
@@ -409,7 +419,7 @@ async function askMuseAutonomous(roomId, threadMsgs) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: config.maxTokens,
-      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, memory]),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
       messages,
     }),
   })
@@ -438,7 +448,8 @@ async function askMuseAutonomous(roomId, threadMsgs) {
 
 async function askMuse(roomId) {
   const msgs = getMessages(ROOMS[roomId].key)
-  const recent = msgs.slice(0, 3).map(m => `"${m.text}"`).join('；')
+  const activeThreadId = msgs[0]?.threadId || msgs[0]?.id
+  const recent = msgs.filter(message => String(message.threadId || message.id) === String(activeThreadId)).slice(0, 3).map(m => `"${m.text}"`).join('；')
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
   const memory = await getMuseMemoryContext(recent || ROOM_CONTEXT[roomId])
 
@@ -463,11 +474,13 @@ async function askMuse(roomId) {
 
 async function askMuseReply(roomId, threadMsgs) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const messages = threadMsgs.map(m => ({
+  const threadId = threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id
+  const latestUserText = [...threadMsgs].reverse().find(message => !message.fromMuse)?.text || ''
+  const conversationContext = await getConversationContext(roomId, threadId, latestUserText)
+  const messages = threadMsgs.filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0)).slice(-30).map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
     content: claudeMessageContent(m),
   }))
-  const latestUserText = [...threadMsgs].reverse().find(message => !message.fromMuse)?.text || ''
   const memory = await getMuseMemoryContext(latestUserText)
   // Claude API requires the last message to be from the user
   if (messages.at(-1)?.role === 'assistant') {
@@ -479,7 +492,7 @@ async function askMuseReply(roomId, threadMsgs) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: config.maxTokens,
-      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [memory]),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
       messages,
     }),
   })
@@ -743,10 +756,17 @@ function msgListHTML(key) {
   return `${older.length ? `
     <details class="pajama-pile">
       <summary><span class="pile-icon">◇</span><span><strong>${pileName}</strong><small>${older.length} 段收好的聊天</small></span></summary>
-      <div class="pile-threads">${older.map(threadHTML).join('')}</div>
+      <div class="pile-threads" data-pile-key="${key}"></div>
     </details>` : ''}
     <div class="chat-current-label">最近</div>
     ${threadHTML(current)}`
+}
+
+function loadFoldedThreads(key, container) {
+  if (!container || container.dataset.loaded === 'true') return
+  const older = groupThreads(getMessages(key)).slice(1).reverse()
+  container.innerHTML = older.map(threadHTML).join('')
+  container.dataset.loaded = 'true'
 }
 
 
@@ -895,7 +915,7 @@ function memoryCardHTML(memory) {
       ? `有效至 ${memory.expires_at || '未知'}`
       : `更新于 ${memory.updated_at || memory.created_at || '未知'}`
   return `<article class="memory-admin-card" data-memory-id="${esc(memory.id)}" data-memory-type="${memory.type}">
-    <div class="memory-admin-meta">${esc(meta)}</div>
+    <div class="memory-admin-meta">${memory.type !== 'current_state' ? `${esc(memory.folder || '日常')} · ` : ''}${esc(meta)}</div>
     <input class="memory-title-input" value="${esc(memory.title || '')}" aria-label="记忆标题">
     <textarea class="memory-summary-input" rows="4" aria-label="记忆摘要">${esc(memory.summary || '')}</textarea>
     <input class="memory-tags-input" value="${esc(tags)}" placeholder="检索标签，用逗号分开" aria-label="检索标签">
@@ -925,6 +945,7 @@ function renderMemoryManager() {
         <p>缪时每次只会想起少量相关内容，不会一次读完全部记忆。你可以在这里校正或删除它们。</p>
         ${data?.expired_current_count ? `<small>${data.expired_current_count} 条已过期当前状态已自动停止检索。</small>` : ''}
       </div>
+      ${data?.folders?.length ? `<details class="memory-folder-index"><summary>记忆文件夹与联想关键词</summary>${data.folders.map(folder => `<p><strong>${esc(folder.name)}</strong>：${esc(folder.keywords.join('、'))}</p>`).join('')}</details>` : ''}
       ${!data ? '<p class="empty">正在打开记忆柜…</p>' : sections.map(([key, title, description]) => `
         <section class="memory-admin-section">
           <div class="memory-section-heading"><div><h3>${title}</h3><p>${description}</p></div><span>${(data[key] || []).length}</span></div>
@@ -1158,7 +1179,11 @@ async function go(view, room = null) {
   state.modalOpen = false
   window.scrollTo(0, 0)
   // 预加载该房间的留言
-  if (room && ROOMS[room]) await loadMessages(ROOMS[room].key)
+  if (room && ROOMS[room]) {
+    await loadMessages(ROOMS[room].key)
+    const latest = getMessages(ROOMS[room].key)[0]
+    if (latest) requestBackgroundMaintenance(ROOMS[room].key, latest.threadId || latest.id)
+  }
   if (view === 'memory') await loadMessages(ROOMS.memory.key)
   if (view === 'diary') await loadMessages(ROOMS.diary.key)
   if (view === 'memory-manager') {
@@ -1248,7 +1273,7 @@ async function autoReplyInRoom(roomId, key, threadId) {
   }
   if (result.shouldReply) await saveMessage(key, result.reply, true, Number(threadId))
   else await saveMessage(key, result.status || normalizeMuseStatus(''), true, Number(threadId), [], 'status')
-  if (result.decision?.diaryAction === 'write_now') await requestEarlyDiary(key)
+  requestBackgroundMaintenance(key, threadId, result.decision?.diaryAction === 'write_now')
   return result.shouldReply
 }
 
@@ -1361,6 +1386,11 @@ function render() {
     })
 
     msgList.addEventListener('click', async (e) => {
+      const pileSummary = e.target.closest('.pajama-pile > summary')
+      if (pileSummary) {
+        loadFoldedThreads(key, pileSummary.parentElement?.querySelector('.pile-threads'))
+        return
+      }
       const deleteBtn = e.target.closest('.delete-msg-btn')
       if (deleteBtn) {
         if (!window.confirm('确认吗')) return
@@ -1381,6 +1411,7 @@ function render() {
         try {
           const reply = await askMuseReply(state.room, threadMsgs)
           await saveMessage(key, reply, true, Number(tid))
+          requestBackgroundMaintenance(key, tid)
           document.getElementById('msg-list').innerHTML = msgListHTML(key)
         } catch {
           museBtn.disabled = false
@@ -1534,6 +1565,7 @@ function render() {
         try {
           const reply = await askMuseReply('memory', threadMsgs)
           await saveMessage(key, reply, true, Number(tid))
+          requestBackgroundMaintenance(key, tid)
           state.bookPage.memory = 1
           render()
         } catch {
