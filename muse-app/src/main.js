@@ -915,7 +915,7 @@ function memoryCardHTML(memory) {
       ? `有效至 ${memory.expires_at || '未知'}`
       : `更新于 ${memory.updated_at || memory.created_at || '未知'}`
   return `<article class="memory-admin-card" data-memory-id="${esc(memory.id)}" data-memory-type="${memory.type}">
-    <div class="memory-admin-meta">${memory.type !== 'current_state' ? `${esc(memory.folder || '日常')} · ` : ''}${esc(meta)}</div>
+    <div class="memory-admin-meta">${memory.type !== 'current_state' ? `${esc((memory.topics || ['日常']).join('，'))} · ` : ''}${esc(meta)}</div>
     <input class="memory-title-input" value="${esc(memory.title || '')}" aria-label="记忆标题">
     <textarea class="memory-summary-input" rows="4" aria-label="记忆摘要">${esc(memory.summary || '')}</textarea>
     <input class="memory-tags-input" value="${esc(tags)}" placeholder="检索标签，用逗号分开" aria-label="检索标签">
@@ -925,6 +925,55 @@ function memoryCardHTML(memory) {
       <button class="memory-delete-btn">删除</button>
     </div>
   </article>`
+}
+
+function memoryLitCardHTML(memory) {
+  return `<article class="memory-lit-card">
+    <div class="memory-lit-topics">${(memory.topics || ['日常']).map(topic => esc(topic)).join(' · ')}</div>
+    <strong>${esc(memory.title || '')}</strong>
+    <p>${esc(memory.summary || '')}</p>
+  </article>`
+}
+
+function renderMemoryGraphSVG(graph) {
+  if (!graph?.nodes?.length) return '<p class="empty">还没有记忆可以画地图。</p>'
+  const width = 340, height = 340, cx = width / 2, cy = height / 2
+  const parentRadius = 112, childRadius = 50, childSpread = 0.95
+  const positions = new Map()
+  const parents = graph.nodes.filter(node => !node.parent)
+  parents.forEach((parent, i) => {
+    const angle = (i / parents.length) * Math.PI * 2 - Math.PI / 2
+    const x = cx + Math.cos(angle) * parentRadius
+    const y = cy + Math.sin(angle) * parentRadius
+    positions.set(parent.id, { x, y })
+    const children = graph.nodes.filter(node => node.parent === parent.id)
+    children.forEach((child, j) => {
+      const childAngle = angle - childSpread / 2 + (children.length > 1 ? (j / (children.length - 1)) * childSpread : 0)
+      positions.set(child.id, { x: x + Math.cos(childAngle) * childRadius, y: y + Math.sin(childAngle) * childRadius })
+    })
+  })
+  const edgesSvg = graph.edges.map(edge => {
+    const a = positions.get(edge.source), b = positions.get(edge.target)
+    if (!a || !b) return ''
+    const structural = edge.type === 'structural'
+    const strokeWidth = structural ? 1.2 : Math.min(4, 1 + edge.weight * 0.6)
+    const dash = structural ? '' : 'stroke-dasharray="3,3"'
+    const stroke = structural ? 'rgba(164,123,184,0.4)' : 'rgba(194,141,112,0.6)'
+    return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${stroke}" stroke-width="${strokeWidth}" ${dash}></line>`
+  }).join('')
+  const nodesSvg = graph.nodes.map(node => {
+    const pos = positions.get(node.id)
+    if (!pos) return ''
+    const isParent = !node.parent
+    const r = (isParent ? 22 : 13) + Math.min(12, node.count * 2)
+    const fill = node.count > 0 ? (isParent ? '#5b3170' : '#3a2249') : 'rgba(58,34,73,0.35)'
+    const textColor = node.count > 0 ? '#e9d6f2' : '#7a6a85'
+    return `<g class="memory-node" data-topic="${esc(node.id)}" transform="translate(${pos.x.toFixed(1)},${pos.y.toFixed(1)})">
+      <circle r="${r}" fill="${fill}" stroke="#a47bb8" stroke-width="1"></circle>
+      <text text-anchor="middle" dy="${r + 12}" font-size="${isParent ? 11 : 9.5}" fill="${textColor}">${esc(node.label)}</text>
+    </g>`
+  }).join('')
+  return `<svg class="memory-graph-svg" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">${edgesSvg}${nodesSvg}</svg>`
 }
 
 function renderMemoryManager() {
@@ -945,7 +994,16 @@ function renderMemoryManager() {
         <p>缪时每次只会想起少量相关内容，不会一次读完全部记忆。你可以在这里校正或删除它们。</p>
         ${data?.expired_current_count ? `<small>${data.expired_current_count} 条已过期当前状态已自动停止检索。</small>` : ''}
       </div>
-      ${data?.folders?.length ? `<details class="memory-folder-index"><summary>记忆文件夹与联想关键词</summary>${data.folders.map(folder => `<p><strong>${esc(folder.name)}</strong>：${esc(folder.keywords.join('、'))}</p>`).join('')}</details>` : ''}
+      ${data?.graph ? `<section class="memory-graph-section">
+        <div class="memory-section-heading"><div><h3>记忆地图</h3><p>相关的 topic 会连在一起；实线是分类里的父子关系，虚线是同一条记忆同时命中的 topic</p></div></div>
+        <div class="memory-graph-wrap" id="memory-graph-wrap">${renderMemoryGraphSVG(data.graph)}</div>
+        <div class="memory-test-row">
+          <input id="memory-test-input" class="memory-test-input" placeholder="试试输入一句话，比如“纽约好吃的”">
+          <button id="memory-test-btn" class="memory-test-btn">测试检索</button>
+        </div>
+        <div id="memory-test-result" class="memory-test-result"></div>
+      </section>` : ''}
+      ${data?.taxonomy?.length ? `<details class="memory-folder-index"><summary>Topic 分类与联想关键词</summary>${data.taxonomy.map(topic => `<p><strong>${esc(topic.name)}</strong>：${esc(topic.keywords.join('、'))}${(topic.children || []).map(child => `<br>　└ <strong>${esc(child.name)}</strong>：${esc(child.keywords.join('、'))}`).join('')}</p>`).join('')}</details>` : ''}
       ${!data ? '<p class="empty">正在打开记忆柜…</p>' : sections.map(([key, title, description]) => `
         <section class="memory-admin-section">
           <div class="memory-section-heading"><div><h3>${title}</h3><p>${description}</p></div><span>${(data[key] || []).length}</span></div>
@@ -1469,6 +1527,36 @@ function render() {
   } else if (state.view === 'memory-manager') {
     app.innerHTML = renderMemoryManager()
     document.getElementById('back-btn').addEventListener('click', () => go('home'))
+
+    const testBtn = document.getElementById('memory-test-btn')
+    const testInput = document.getElementById('memory-test-input')
+    const resultBox = document.getElementById('memory-test-result')
+    const graphWrap = document.getElementById('memory-graph-wrap')
+    const runMemoryTest = async () => {
+      const q = testInput.value.trim()
+      if (!q || !USE_API) return
+      testBtn.disabled = true
+      testBtn.textContent = '检索中…'
+      graphWrap?.querySelectorAll('.memory-node--lit').forEach(node => node.classList.remove('memory-node--lit'))
+      try {
+        const res = await fetch(`/api/memories?query=${encodeURIComponent(q)}`)
+        if (!res.ok) throw new Error(`API ${res.status}`)
+        const result = await res.json()
+        for (const topic of result.lit_topics || []) {
+          graphWrap?.querySelector(`.memory-node[data-topic="${CSS.escape(topic)}"]`)?.classList.add('memory-node--lit')
+        }
+        resultBox.innerHTML = (result.lit_memories || []).length
+          ? result.lit_memories.map(memoryLitCardHTML).join('')
+          : '<p class="empty">这句话目前点不亮任何记忆。</p>'
+      } catch {
+        resultBox.innerHTML = '<p class="empty">检索失败，再试一次。</p>'
+      }
+      testBtn.disabled = false
+      testBtn.textContent = '测试检索'
+    }
+    testBtn?.addEventListener('click', runMemoryTest)
+    testInput?.addEventListener('keydown', event => { if (event.key === 'Enter') runMemoryTest() })
+
     const page = document.querySelector('.memory-admin-inner')
     page?.addEventListener('click', async event => {
       const card = event.target.closest('.memory-admin-card')

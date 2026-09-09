@@ -1,3 +1,5 @@
+import { TOPIC_PATHS, VALID_TOPIC_PATHS } from './_topics.js'
+
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
 
@@ -15,7 +17,6 @@ const MEMORY_KEYS = {
   sensitive_history: 'memory-v1-sensitive-history',
   current_state: 'memory-v1-current-state',
 }
-const MEMORY_FOLDER_NAMES = new Set(['高中', 'UNC', '纽约', '国内', '日常', '学习和工作'])
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
 const CONVERSATION_SUMMARY_SYSTEM = `你是缪时的短期对话压缩器。把恰好30条原始消息写成一段独立、简洁、准确的近期印象，供缪时继续当前这一次聊天。
@@ -97,7 +98,9 @@ const DIARY_SYSTEM = `你是缪时,代号404,黑客。现在要在你和小乖�
 直接输出五个部分,不要加额外的开场白或结尾寒暄。`
 
 const MEMORY_EXTRACTION_SYSTEM = `你是结构化记忆提取器。从对话原文和日记摘要中只提取未来对话真正有用的信息，不要把闲聊和每句情绪表达都存成长期记忆。
-只输出合法JSON，格式为 {"candidates":[...]} 。每个候选必须有 type，dedupe_key，title，summary，retrieval_tags，folder。type 只能是 ordinary、sensitive_history、current_state 或 discard。folder 只能是 高中、UNC、纽约、国内、日常、学习和工作；选择最贴近未来检索方式的一类。
+只输出合法JSON，格式为 {"candidates":[...]} 。每个候选必须有 type，dedupe_key，title，summary，retrieval_tags，topics。type 只能是 ordinary、sensitive_history、current_state 或 discard。
+topics 是一个数组，最多3个，只能从下面这些路径里选，选最贴近未来检索方式的1到3个（同一条记忆可以同时属于父子两层，比如涉及Barnard的事就选 ["纽约","纽约/Barnard"]）：
+${TOPIC_PATHS.map(topic => topic.path).join('、')}
 ordinary：稳定偏好、持续项目、计划、重复习惯、重要近期事件、关系时刻或之后仍有用的了解。
 sensitive_history：已经发生在过去且情绪敏感的重要经历。额外提供 occurred_at（不知道就写"时间不详"）、current_status:"historical"、interaction_implications 数组、sensitivity:"high"。不保存不必要的图形化原话，不做心理诊断。
 current_state：只能依据对话原文中最近的小乖消息，不能从日记或历史敏感内容推断。额外提供 status、evidence（简短改写）、confidence（0到1）、expires_in_hours（1到72）。不把短期状态写成稳定人格。
@@ -254,6 +257,11 @@ function cleanStringArray(value) {
   return Array.isArray(value) ? value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean).slice(0, 8) : []
 }
 
+function cleanTopicArray(value) {
+  const topics = Array.isArray(value) ? value.filter(item => VALID_TOPIC_PATHS.has(item)) : []
+  return topics.length ? topics.slice(0, 3) : ['日常']
+}
+
 async function upsertMemory(key, item) {
   const existing = await redisGet(key)
   const memories = Array.isArray(existing) ? existing : []
@@ -293,7 +301,7 @@ async function extractAndStoreMemories(batch, diaryText = '') {
       title: String(candidate.title || '').trim().slice(0, 160),
       summary: String(candidate.summary || '').trim().slice(0, 800),
       retrieval_tags: cleanStringArray(candidate.retrieval_tags),
-      folder: MEMORY_FOLDER_NAMES.has(candidate.folder) ? candidate.folder : '日常',
+      topics: cleanTopicArray(candidate.topics),
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
       source: 'conversation-segment',
