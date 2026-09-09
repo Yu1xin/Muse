@@ -979,8 +979,6 @@ function renderMemoryGraphSVG(graph) {
 function renderMemoryManager() {
   const data = state.managedMemories
   const sections = [
-    ['ordinary', '普通长期记忆', '偏好、项目、计划、习惯和关系时刻'],
-    ['sensitive_history', '历史敏感记忆', '始终标记为过去，不代表当前状态'],
     ['current_state', '当前状态', '只显示仍在有效期内的短期状态'],
   ]
   return `<div class="memory-admin-page">
@@ -995,13 +993,14 @@ function renderMemoryManager() {
         ${data?.expired_current_count ? `<small>${data.expired_current_count} 条已过期当前状态已自动停止检索。</small>` : ''}
       </div>
       ${data?.graph ? `<section class="memory-graph-section">
-        <div class="memory-section-heading"><div><h3>记忆地图</h3><p>相关的 topic 会连在一起；实线是分类里的父子关系，虚线是同一条记忆同时命中的 topic</p></div></div>
+        <div class="memory-section-heading"><div><h3>记忆地图</h3><p>点一个 topic 展开它下面的记忆；实线是分类里的父子关系，虚线是同一条记忆同时命中的 topic</p></div></div>
         <div class="memory-graph-wrap" id="memory-graph-wrap">${renderMemoryGraphSVG(data.graph)}</div>
         <div class="memory-test-row">
           <input id="memory-test-input" class="memory-test-input" placeholder="试试输入一句话，比如“纽约好吃的”">
           <button id="memory-test-btn" class="memory-test-btn">测试检索</button>
         </div>
         <div id="memory-test-result" class="memory-test-result"></div>
+        <section class="memory-topic-section" id="memory-topic-section"></section>
       </section>` : ''}
       ${data?.taxonomy?.length ? `<details class="memory-folder-index"><summary>Topic 分类与联想关键词</summary>${data.taxonomy.map(topic => `<p><strong>${esc(topic.name)}</strong>：${esc(topic.keywords.join('、'))}${(topic.children || []).map(child => `<br>　└ <strong>${esc(child.name)}</strong>：${esc(child.keywords.join('、'))}`).join('')}</p>`).join('')}</details>` : ''}
       ${!data ? '<p class="empty">正在打开记忆柜…</p>' : sections.map(([key, title, description]) => `
@@ -1011,6 +1010,17 @@ function renderMemoryManager() {
         </section>`).join('')}
     </main>
   </div>`
+}
+
+function memoriesForTopic(data, topicId) {
+  const isParent = !topicId.includes('/')
+  const matches = memory => isParent
+    ? (memory.topics || []).some(topic => topic === topicId || topic.startsWith(`${topicId}/`))
+    : (memory.topics || []).includes(topicId)
+  return {
+    ordinary: (data?.ordinary || []).filter(matches),
+    sensitive_history: (data?.sensitive_history || []).filter(matches),
+  }
 }
 
 function renderBook(roomId) {
@@ -1556,6 +1566,31 @@ function render() {
     }
     testBtn?.addEventListener('click', runMemoryTest)
     testInput?.addEventListener('keydown', event => { if (event.key === 'Enter') runMemoryTest() })
+
+    const topicSection = document.getElementById('memory-topic-section')
+    let selectedTopic = null
+    const renderTopicSection = () => {
+      graphWrap?.querySelectorAll('.memory-node').forEach(node => node.classList.toggle('memory-node--selected', node.dataset.topic === selectedTopic))
+      if (!topicSection) return
+      if (!selectedTopic) { topicSection.innerHTML = ''; return }
+      const { ordinary, sensitive_history: historical } = memoriesForTopic(state.managedMemories, selectedTopic)
+      topicSection.innerHTML = `
+        <div class="memory-topic-heading">
+          <h4>「${esc(selectedTopic.split('/').pop())}」相关记忆 · ${ordinary.length + historical.length}</h4>
+          <button class="memory-topic-close" id="memory-topic-close">✕ 收起</button>
+        </div>
+        ${(ordinary.length || historical.length)
+          ? `<div class="memory-admin-list">${[...ordinary, ...historical].map(memoryCardHTML).join('')}</div>`
+          : '<p class="empty">这个 topic 下还没有记忆。</p>'}
+      `
+      document.getElementById('memory-topic-close')?.addEventListener('click', () => { selectedTopic = null; renderTopicSection() })
+    }
+    graphWrap?.addEventListener('click', event => {
+      const node = event.target.closest('.memory-node')
+      if (!node) return
+      selectedTopic = selectedTopic === node.dataset.topic ? null : node.dataset.topic
+      renderTopicSection()
+    })
 
     const page = document.querySelector('.memory-admin-inner')
     page?.addEventListener('click', async event => {

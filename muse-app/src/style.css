@@ -945,10 +945,28 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   background: rgba(20,13,27,0.85);
 }
 .memory-graph-svg { width: min(340px, 100%); height: auto; display: block; }
+.memory-node { cursor: pointer; }
 .memory-node circle { transition: stroke 0.2s, stroke-width 0.2s, filter 0.2s; }
 .memory-node text { user-select: none; }
+.memory-node:hover circle { stroke-width: 1.8; }
 .memory-node--lit circle { stroke: #ffd166; stroke-width: 2.6; filter: drop-shadow(0 0 6px rgba(255,209,102,0.85)); }
 .memory-node--lit text { fill: #ffe9b3; font-weight: 700; }
+.memory-node--selected circle { stroke: #8fd3ff; stroke-width: 2.6; filter: drop-shadow(0 0 6px rgba(143,211,255,0.8)); }
+.memory-node--selected text { fill: #cdeaff; font-weight: 700; }
+
+.memory-topic-section { margin-top: 14px; }
+.memory-topic-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.memory-topic-heading h4 { font-size: 13px; letter-spacing: 1px; color: #cdeaff; }
+.memory-topic-close {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
 
 .memory-test-row { display: flex; gap: 8px; margin-top: 12px; }
 .memory-test-input {
