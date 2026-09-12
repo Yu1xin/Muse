@@ -3,6 +3,6 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "crons": [
-    { "path": "/api/muse-proactive?mode=tick", "schedule": "0 */2 * * *" }
+    { "path": "/api/muse-proactive?mode=tick", "schedule": "0 20 * * *" }
   ]
 }
