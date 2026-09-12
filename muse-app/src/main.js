@@ -940,6 +940,22 @@ function memoryLitCardHTML(memory) {
   </article>`
 }
 
+function dedupeGroupHTML(type, group, originals) {
+  const items = group.ids.map(id => originals.find(memory => String(memory.id) === String(id))).filter(Boolean)
+  return `<article class="dedupe-group" data-type="${esc(type)}" data-ids="${esc(group.ids.join(','))}">
+    <div class="dedupe-originals">${items.map(item => `<div class="dedupe-original"><strong>${esc(item.title)}</strong><p>${esc(item.summary)}</p></div>`).join('')}</div>
+    <div class="dedupe-merged">
+      <input class="dedupe-title-input" value="${esc(group.merged_title)}" aria-label="合并后标题">
+      <textarea class="dedupe-summary-input" rows="4" aria-label="合并后摘要">${esc(group.merged_summary)}</textarea>
+      <input class="dedupe-tags-input" value="${esc((group.merged_tags || []).join('，'))}" placeholder="合并后标签，用逗号分开" aria-label="合并后标签">
+    </div>
+    <div class="dedupe-actions">
+      <button class="dedupe-merge-btn">确认合并</button>
+      <button class="dedupe-skip-btn">跳过</button>
+    </div>
+  </article>`
+}
+
 function renderMemoryGraphSVG(graph) {
   if (!graph?.nodes?.length) return '<p class="empty">还没有记忆可以画地图。</p>'
   const width = 340, height = 340, cx = width / 2, cy = height / 2
@@ -1006,6 +1022,14 @@ function renderMemoryManager() {
         </div>
         <div id="memory-test-result" class="memory-test-result"></div>
         <section class="memory-topic-section" id="memory-topic-section"></section>
+      </section>` : ''}
+      ${data ? `<section class="memory-dedupe-section">
+        <div class="memory-section-heading"><div><h3>重复检测</h3><p>找出说的是同一件事、但被分开存了好几条的记忆；合并前你可以先改一改再确认</p></div></div>
+        <div class="memory-dedupe-controls">
+          <button class="memory-dedupe-btn" data-type="ordinary">检测普通长期记忆</button>
+          <button class="memory-dedupe-btn" data-type="sensitive_history">检测历史敏感记忆</button>
+        </div>
+        <div id="memory-dedupe-result" class="memory-dedupe-result"></div>
       </section>` : ''}
       ${data?.taxonomy?.length ? `<details class="memory-folder-index"><summary>Topic 分类与联想关键词</summary>${data.taxonomy.map(topic => `<p><strong>${esc(topic.name)}</strong>：${esc(topic.keywords.join('、'))}${(topic.children || []).map(child => `<br>　└ <strong>${esc(child.name)}</strong>：${esc(child.keywords.join('、'))}`).join('')}</p>`).join('')}</details>` : ''}
       ${!data ? '<p class="empty">正在打开记忆柜…</p>' : sections.map(([key, title, description]) => `
@@ -1616,6 +1640,54 @@ function render() {
       if (!node) return
       selectedTopic = selectedTopic === node.dataset.topic ? null : node.dataset.topic
       renderTopicSection()
+    })
+
+    const dedupeResult = document.getElementById('memory-dedupe-result')
+    document.querySelectorAll('.memory-dedupe-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const type = btn.dataset.type
+        const originalLabel = btn.textContent
+        btn.disabled = true
+        btn.textContent = '检测中…'
+        try {
+          const res = await fetch(`/api/memories?mode=dedupe-scan&type=${type}`)
+          if (!res.ok) throw new Error(`API ${res.status}`)
+          const result = await res.json()
+          const originals = state.managedMemories?.[type] || []
+          dedupeResult.innerHTML = (result.groups || []).length
+            ? result.groups.map(group => dedupeGroupHTML(type, group, originals)).join('')
+            : '<p class="empty">没发现明显重复。</p>'
+        } catch {
+          dedupeResult.innerHTML = '<p class="empty">检测失败，再试一次。</p>'
+        }
+        btn.disabled = false
+        btn.textContent = originalLabel
+      })
+    })
+    dedupeResult?.addEventListener('click', async event => {
+      const group = event.target.closest('.dedupe-group')
+      if (!group) return
+      if (event.target.closest('.dedupe-skip-btn')) { group.remove(); return }
+      const mergeBtn = event.target.closest('.dedupe-merge-btn')
+      if (!mergeBtn) return
+      mergeBtn.disabled = true
+      mergeBtn.textContent = '合并中…'
+      const body = {
+        type: group.dataset.type,
+        ids: group.dataset.ids.split(','),
+        title: group.querySelector('.dedupe-title-input')?.value || '',
+        summary: group.querySelector('.dedupe-summary-input')?.value || '',
+        retrieval_tags: (group.querySelector('.dedupe-tags-input')?.value || '').split(/[,，]/).map(tag => tag.trim()).filter(Boolean),
+      }
+      try {
+        const res = await fetch('/api/memories?action=merge-duplicates', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+        if (!res.ok) throw new Error(`API ${res.status}`)
+        group.remove()
+        await loadManagedMemories()
+      } catch {
+        mergeBtn.disabled = false
+        mergeBtn.textContent = '合并失败，重试'
+      }
     })
 
     const page = document.querySelector('.memory-admin-inner')

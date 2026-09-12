@@ -11,6 +11,11 @@ const MEMORY_KEYS = {
 
 const MEMORY_ROUTER_SYSTEM = `根据当前消息，从长期记忆索引中选择语义相关的记忆。只输出相关记忆的 id，用英文逗号分隔；没有明确相关项就输出 NONE。最多选择4项，不要解释。不要因为同属一个宽泛topic就选择不相关内容。`
 
+const DEDUPE_SCAN_SYSTEM = `你是记忆去重助手。下面是缪时长期记忆的完整索引（id|title|summary）。找出其中语义重复或高度相似、实际上在说同一件事/同一个持续偏好/同一个反复出现情况的条目，把它们分成组。
+只输出合法JSON：{"groups":[{"ids":["id1","id2"],"merged_title":"...","merged_summary":"...","merged_tags":["..."]}]}。
+每组至少2个id。merged_title和merged_summary要把这些重复条目里的信息合并、去重、保留最新最具体的说法，不要丢失细节。merged_tags最多6个。
+如果两条记忆主题接近但其实是不同的具体事件（比如都关于工作但是两次不同的求职经历），不要合并。宁可少合并，不要把不同的事情硬凑到一起。没有重复就输出{"groups":[]}，不要解释。`
+
 function normalizedText(value) {
   return String(value || '').toLowerCase().replace(/\s+/g, '')
 }
@@ -44,6 +49,40 @@ async function semanticMemoryRoute(query, memories) {
     console.error('[memory-semantic-router] failed', { message: error?.message || String(error) })
     return []
   }
+}
+
+async function scanDuplicates(memories) {
+  if (memories.length < 2) return []
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: DEDUPE_SCAN_SYSTEM,
+      messages: [{
+        role: 'user',
+        content: `记忆索引：\n${memories.map(item => `${item.id}|${item.title}|${item.summary}`).join('\n')}`,
+      }],
+    }),
+  })
+  const data = await response.json()
+  if (!response.ok) throw new Error(`API ${response.status}`)
+  const text = (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('')
+  const parsed = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))
+  const validIds = new Set(memories.map(item => String(item.id)))
+  return (Array.isArray(parsed.groups) ? parsed.groups : [])
+    .map(group => ({
+      ids: Array.isArray(group.ids) ? group.ids.map(String).filter(id => validIds.has(id)) : [],
+      merged_title: String(group.merged_title || '').trim().slice(0, 160),
+      merged_summary: String(group.merged_summary || '').trim().slice(0, 800),
+      merged_tags: Array.isArray(group.merged_tags) ? group.merged_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 6) : [],
+    }))
+    .filter(group => group.ids.length >= 2 && group.merged_title && group.merged_summary)
 }
 
 async function redisGet(key) {
@@ -191,6 +230,30 @@ export default async function handler(req, res) {
       return res.json({ ok: true })
     }
 
+    if (req.method === 'POST' && req.query?.action === 'merge-duplicates') {
+      const { type, ids, title, summary, retrieval_tags = [] } = req.body || {}
+      const key = memoryKey(type)
+      if (!key || !Array.isArray(ids) || ids.length < 2) return res.status(400).json({ error: 'type and at least 2 ids are required' })
+      const cleanTitle = String(title || '').trim().slice(0, 160)
+      const cleanSummary = String(summary || '').trim().slice(0, 800)
+      if (!cleanTitle || !cleanSummary) return res.status(400).json({ error: 'Title and summary cannot be empty' })
+      const memories = await redisGet(key)
+      const [keepId, ...removeIds] = ids.map(String)
+      const keepIndex = memories.findIndex(memory => String(memory.id) === keepId)
+      if (keepIndex < 0) return res.status(404).json({ error: 'Memory not found' })
+      memories[keepIndex] = {
+        ...memories[keepIndex],
+        title: cleanTitle,
+        summary: cleanSummary,
+        retrieval_tags: Array.isArray(retrieval_tags) ? retrieval_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8) : memories[keepIndex].retrieval_tags,
+        updated_at: new Date().toISOString(),
+      }
+      const removeSet = new Set(removeIds)
+      const next = memories.filter((memory, index) => index === keepIndex || !removeSet.has(String(memory.id)))
+      await redisSet(key, next)
+      return res.json({ memory: publicMemory(next.find(memory => String(memory.id) === keepId)) })
+    }
+
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
     const query = String(req.query?.query || '').slice(0, 1000)
     const [ordinaryRaw, historicalRaw, currentRaw] = await Promise.all([
@@ -215,6 +278,12 @@ export default async function handler(req, res) {
         current_state: activeCurrent.sort(newestFirst).map(publicMemory),
         expired_current_count: Math.max(0, (Array.isArray(currentRaw) ? currentRaw.length : 0) - activeCurrent.length),
       })
+    }
+    if (req.query?.mode === 'dedupe-scan') {
+      const type = req.query?.type === 'sensitive_history' ? 'sensitive_history' : 'ordinary'
+      const pool = type === 'sensitive_history' ? allHistorical : allOrdinary
+      const groups = await scanDuplicates(pool.map(publicMemory))
+      return res.json({ type, groups })
     }
     const current = pickRelevant(activeCurrent, query, 3, 1)
     const queryText = normalizedText(query)

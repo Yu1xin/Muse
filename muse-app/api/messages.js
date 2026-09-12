@@ -99,6 +99,7 @@ const DIARY_SYSTEM = `你是缪时,代号404,黑客。现在要在你和小乖�
 
 const MEMORY_EXTRACTION_SYSTEM = `你是结构化记忆提取器。从对话原文和日记摘要中只提取未来对话真正有用的信息，不要把闲聊和每句情绪表达都存成长期记忆。
 只输出合法JSON，格式为 {"candidates":[...]} 。每个候选必须有 type，dedupe_key，title，summary，retrieval_tags，topics。type 只能是 ordinary、sensitive_history、current_state 或 discard。
+输入里会附带一份"已有记忆索引"（dedupe_key|title）。提取前先检查：如果某个候选其实是索引里已有条目的补充、更新、进展或换个说法的重复（同一件事、同一个持续偏好、同一个反复出现的情况），把这个候选的 dedupe_key 原样复制成那条已有记忆的 dedupe_key，这样它会更新那条记忆而不是新建一条；只有确认是全新内容时才自己起一个新的 dedupe_key。宁可多复用已有 key，也不要把同一件事拆成好几条。
 topics 是一个数组，最多3个，只能从下面这些路径里选，选最贴近未来检索方式的1到3个（同一条记忆可以同时属于父子两层，比如涉及Barnard的事就选 ["纽约","纽约/Barnard"]）：
 ${TOPIC_PATHS.map(topic => topic.path).join('、')}
 ordinary：稳定偏好、持续项目、计划、重复习惯、重要近期事件、关系时刻或之后仍有用的了解。
@@ -278,13 +279,21 @@ async function extractAndStoreMemories(batch, diaryText = '') {
   const transcript = batch
       .map(m => `${ROOM_NAMES[m.room] || m.room}|时间:${m.time || '不详'}|${m.fromMuse ? '缪时' : '小乖'}|${m.text || ''}${m.attachmentCount ? ` [图片${m.attachmentCount}张${m.visualNote ? `：${m.visualNote}` : ''}]` : ''}`)
     .join('\n')
+  const [existingOrdinary, existingHistorical] = await Promise.all([
+    redisGet(MEMORY_KEYS.ordinary),
+    redisGet(MEMORY_KEYS.sensitive_history),
+  ])
+  const existingIndex = [...existingOrdinary, ...existingHistorical]
+    .slice(0, 200)
+    .map(item => `${item.dedupe_key}|${item.title}`)
+    .join('\n') || '（还没有已存的长期记忆）'
   const data = await callClaude({
     label: 'memory-extraction',
     maxTokens: 1600,
     system: MEMORY_EXTRACTION_SYSTEM,
     messages: [{
       role: 'user',
-      content: `对话原文（current_state只能依据这里最近的小乖消息）：\n${transcript}\n\n回顾性日记（仅辅助ordinary和sensitive_history，绝对不能作为current_state的证据）：\n${diaryText}`,
+      content: `已有记忆索引（判断候选是否和这些重复用，不代表要重复输出）：\n${existingIndex}\n\n对话原文（current_state只能依据这里最近的小乖消息）：\n${transcript}\n\n回顾性日记（仅辅助ordinary和sensitive_history，绝对不能作为current_state的证据）：\n${diaryText}`,
     }],
   })
   if (data.stop_reason === 'max_tokens') throw new Error('memory extraction hit token limit; refusing partial JSON')
