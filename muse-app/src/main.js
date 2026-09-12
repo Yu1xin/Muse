@@ -417,7 +417,7 @@ async function askMuseAutonomous(roomId, threadMsgs) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
       messages,
@@ -457,7 +457,7 @@ async function askMuse(roomId) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       system: buildCachedSystem([MUSE_PERSONA, config.extraSystem], [memory]),
       messages: [{
@@ -490,7 +490,7 @@ async function askMuseReply(roomId, threadMsgs) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
       messages,
@@ -521,7 +521,7 @@ async function askMuseTool(tool, fields) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-5',
       max_tokens: 900,
       system: buildCachedSystem([MUSE_PERSONA, toolSystem], [memory]),
       messages: [{ role: 'user', content: userContent }],
