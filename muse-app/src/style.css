@@ -935,6 +935,39 @@ input[type="text"]::placeholder { color: var(--text-muted); }
 .memory-folder-index summary { color: var(--text); cursor: pointer; }
 .memory-folder-index p { margin-top: 8px; }
 
+.proactive-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  width: min(340px, calc(100% - 32px));
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(192,64,112,0.4);
+  background: rgba(26,20,36,0.96);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  cursor: pointer;
+  animation: proactive-toast-in 0.35s ease-out;
+  z-index: 20;
+}
+@keyframes proactive-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.proactive-toast-tag { color: var(--accent-light); font-size: 11px; letter-spacing: 1px; white-space: nowrap; margin-top: 2px; }
+.proactive-toast-text { flex: 1; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+.proactive-toast-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px;
+}
+
 .memory-graph-section { margin-top: 20px; }
 .memory-graph-wrap {
   display: flex;

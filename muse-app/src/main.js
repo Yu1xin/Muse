@@ -828,6 +828,11 @@ function renderHome() {
           <span class="scene-label">减肥中心</span>
         </button>
       </div>
+      <div class="proactive-toast" id="proactive-toast" hidden>
+        <span class="proactive-toast-tag">✦ 缪时</span>
+        <p class="proactive-toast-text" id="proactive-toast-text"></p>
+        <button class="proactive-toast-close" id="proactive-toast-close" aria-label="关闭">✕</button>
+      </div>
     </div>`
 }
 
@@ -1347,6 +1352,26 @@ async function autoReplyInRoom(roomId, key, threadId) {
 
 // ── Main render ───────────────────────────────────────────────────────────────
 
+async function checkProactiveMessage() {
+  if (!USE_API) return
+  try {
+    const res = await fetch('/api/muse-proactive?mode=poll')
+    if (!res.ok) return
+    const data = await res.json()
+    if (!data?.message?.text) return
+    const toast = document.getElementById('proactive-toast')
+    const text = document.getElementById('proactive-toast-text')
+    if (!toast || !text) return
+    text.textContent = data.message.text
+    toast.hidden = false
+    toast.addEventListener('click', () => go('scene', 'living'), { once: true })
+    document.getElementById('proactive-toast-close')?.addEventListener('click', event => {
+      event.stopPropagation()
+      toast.hidden = true
+    }, { once: true })
+  } catch {}
+}
+
 function render() {
   const app = document.getElementById('app')
 
@@ -1361,6 +1386,7 @@ function render() {
         else go('scene', r)
       })
     })
+    checkProactiveMessage()
 
   } else if (state.view === 'scene') {
     app.innerHTML = renderScene(state.room)

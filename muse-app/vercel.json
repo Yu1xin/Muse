@@ -1,5 +1,8 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": "vite",
+  "crons": [
+    { "path": "/api/muse-proactive?mode=tick", "schedule": "0 */2 * * *" }
+  ]
 }
