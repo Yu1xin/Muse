@@ -828,6 +828,11 @@ function renderHome() {
           <span class="scene-label">减肥中心</span>
         </button>
       </div>
+      <div class="go-out-panel">
+        <input id="go-out-input" class="go-out-input" placeholder="不填就随便逛逛，比如“去知乎逛逛”">
+        <button id="go-out-btn" class="go-out-btn" type="button">让他出门 🚪</button>
+        <p id="go-out-result" class="go-out-result" hidden></p>
+      </div>
       <div class="proactive-toast" id="proactive-toast" hidden>
         <span class="proactive-toast-tag">✦ 缪时</span>
         <p class="proactive-toast-text" id="proactive-toast-text"></p>
@@ -1411,6 +1416,36 @@ function render() {
       })
     })
     checkProactiveMessage()
+
+    const goOutBtn = document.getElementById('go-out-btn')
+    const goOutInput = document.getElementById('go-out-input')
+    const goOutResult = document.getElementById('go-out-result')
+    const sendGoOut = async () => {
+      if (!USE_API || goOutBtn.disabled) return
+      const destination = goOutInput.value.trim()
+      goOutBtn.disabled = true
+      goOutBtn.textContent = '出门中…'
+      goOutResult.hidden = true
+      try {
+        const res = await fetch('/api/muse-proactive?mode=go-out', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ destination }),
+        })
+        if (!res.ok) throw new Error(`API ${res.status}`)
+        const data = await res.json()
+        goOutResult.textContent = data.text || '他逛了一圈，没找到特别想说的，再试一次？'
+        goOutResult.hidden = false
+        goOutInput.value = ''
+      } catch {
+        goOutResult.textContent = '出门失败了，再试一次。'
+        goOutResult.hidden = false
+      }
+      goOutBtn.disabled = false
+      goOutBtn.textContent = '让他出门 🚪'
+    }
+    goOutBtn?.addEventListener('click', sendGoOut)
+    goOutInput?.addEventListener('keydown', event => { if (event.key === 'Enter') sendGoOut() })
 
   } else if (state.view === 'scene') {
     app.innerHTML = renderScene(state.room)
