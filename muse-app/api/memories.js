@@ -1,4 +1,5 @@
 import { TOPIC_TAXONOMY, matchTopicsInText, inferTopics, buildTopicGraph } from './_topics.js'
+import { requireUser } from './_auth.js'
 
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
@@ -197,6 +198,7 @@ function formatContext(ordinary, historical, current) {
 
 export default async function handler(req, res) {
   try {
+    if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
     if (req.method === 'PATCH') {
       const { id, type, title, summary, retrieval_tags = [], interaction_implications, status, evidence } = req.body || {}
       const key = memoryKey(type)

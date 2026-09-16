@@ -1,4 +1,5 @@
 import './style.css'
+import { supabase } from './supabaseClient.js'
 
 const ROOMS = {
   living:  { key: 'room-living',  name: '客厅' },
@@ -10,6 +11,16 @@ const ROOMS = {
 // 生产环境用 API，本地开发用 localStorage
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 const USE_API = !LOCAL_HOSTS.has(window.location.hostname)
+const ALLOWED_EMAILS = new Set(['yuxinh402@gmail.com', 'yh3832@barnard.edu'])
+
+// 给需要登录态的请求自动带上 Supabase 的 access token
+async function apiFetch(url, options = {}) {
+  if (!USE_API) return fetch(url, options)
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers = { ...(options.headers || {}) }
+  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  return fetch(url, { ...options, headers })
+}
 
 // 内存缓存，避免重复请求
 const msgCache = {}
@@ -26,7 +37,7 @@ async function loadMessages(key) {
     }
   }
   try {
-    const res = await fetch(`/api/messages?room=${key}`)
+    const res = await apiFetch(`/api/messages?room=${key}`)
     const data = await res.json()
     msgCache[key] = data
     return data
@@ -47,7 +58,7 @@ async function saveMessage(key, text, fromMuse = false, threadId = null, attachm
     localStorage.setItem(key, JSON.stringify(msgs))
     return m
   }
-  const res = await fetch(`/api/messages?room=${key}`, {
+  const res = await apiFetch(`/api/messages?room=${key}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text, fromMuse, threadId, attachments, kind }),
@@ -67,7 +78,7 @@ async function annotateImageMessage(key, id, visualNote) {
     return
   }
   try {
-    await fetch(`/api/messages?room=${key}`, {
+    await apiFetch(`/api/messages?room=${key}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id, visualNote }),
@@ -76,7 +87,7 @@ async function annotateImageMessage(key, id, visualNote) {
 }
 
 async function uploadImage(file) {
-  const res = await fetch('/api/media', {
+  const res = await apiFetch('/api/media', {
     method: 'POST',
     headers: { 'content-type': file.type },
     body: file,
@@ -93,7 +104,7 @@ async function deleteMessage(key, id) {
     localStorage.setItem(key, JSON.stringify(msgs))
     return
   }
-  const res = await fetch(`/api/messages?room=${key}`, {
+  const res = await apiFetch(`/api/messages?room=${key}`, {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id }),
@@ -258,7 +269,7 @@ function buildCachedSystem(staticParts, dynamicParts) {
 async function getMuseMemoryContext(query) {
   if (!USE_API || !query?.trim()) return ''
   try {
-    const res = await fetch(`/api/memories?query=${encodeURIComponent(query.slice(0, 1000))}`)
+    const res = await apiFetch(`/api/memories?query=${encodeURIComponent(query.slice(0, 1000))}`)
     if (!res.ok) return ''
     const data = await res.json()
     return typeof data.context === 'string' ? data.context : ''
@@ -271,14 +282,14 @@ async function getConversationContext(roomId, threadId, query = '') {
   if (!USE_API) return { summary: '', coveredThrough: 0 }
   try {
     const room = ROOMS[roomId]?.key
-    const res = await fetch(`/api/messages?room=${encodeURIComponent(room)}&action=context&threadId=${encodeURIComponent(threadId)}&query=${encodeURIComponent(query.slice(0, 500))}`)
+    const res = await apiFetch(`/api/messages?room=${encodeURIComponent(room)}&action=context&threadId=${encodeURIComponent(threadId)}&query=${encodeURIComponent(query.slice(0, 500))}`)
     return res.ok ? await res.json() : { summary: '', coveredThrough: 0 }
   } catch { return { summary: '', coveredThrough: 0 } }
 }
 
 function requestBackgroundMaintenance(key, threadId, writeDiaryNow = false) {
   if (!USE_API) return
-  fetch(`/api/messages?room=${encodeURIComponent(key)}&action=maintain`, {
+  apiFetch(`/api/messages?room=${encodeURIComponent(key)}&action=maintain`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ threadId, writeDiaryNow }),
@@ -299,7 +310,7 @@ async function getMuseState() {
     catch { return { ...DEFAULT_MUSE_STATE } }
   }
   try {
-    const res = await fetch('/api/muse-state')
+    const res = await apiFetch('/api/muse-state')
     return res.ok ? { ...DEFAULT_MUSE_STATE, ...await res.json() } : { ...DEFAULT_MUSE_STATE }
   } catch { return { ...DEFAULT_MUSE_STATE } }
 }
@@ -321,7 +332,7 @@ async function saveMuseState(next) {
     return
   }
   try {
-    await fetch('/api/muse-state', {
+    await apiFetch('/api/muse-state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(state),
@@ -413,7 +424,7 @@ async function askMuseAutonomous(roomId, threadMsgs) {
     ? museState.pendingResponses.map(item => `- id:${item.id}；主题:${item.topic}；来自:${item.room}`).join('\n')
     : '无'
   const stateContext = `【缪时此刻的可衰减状态】\n情绪：${museState.mood}\n身体感受：${museState.body}\n精力：${museState.energy}/100\n近期关系浓度：${museState.relationshipIntensity}/100\n待接回的回应：\n${pendingContext}\n这是缪时的角色状态，不是对小乖的诊断。`
-  const res = await fetch('/api/claude', {
+  const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -453,7 +464,7 @@ async function askMuse(roomId) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
   const memory = await getMuseMemoryContext(recent || ROOM_CONTEXT[roomId])
 
-  const res = await fetch('/api/claude', {
+  const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -486,7 +497,7 @@ async function askMuseReply(roomId, threadMsgs) {
   if (messages.at(-1)?.role === 'assistant') {
     messages.push({ role: 'user', content: '嗯' })
   }
-  const res = await fetch('/api/claude', {
+  const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -517,7 +528,7 @@ async function askMuseTool(tool, fields) {
       : '你现在是书房里的缪时。先嘴欠但护短地接住小乖，再给她一个可执行的时间安排：包含启动仪式、2到5个时间块、每块任务和休息、如果崩了的备用方案、最后一句缪时式监督。不要像效率学讲师，要像缪时在旁边盯着她。'
 
   const memory = await getMuseMemoryContext(userContent)
-  const res = await fetch('/api/claude', {
+  const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -777,6 +788,7 @@ function renderHome() {
       <header class="home-header">
         <h1 class="home-title">Muse & Yuxin</h1>
         <p class="home-subtitle">我们共同的小角落</p>
+        ${USE_API ? '<button id="sign-out-btn" class="sign-out-btn" type="button">退出登录</button>' : ''}
       </header>
       <div class="scene-cards">
         <button class="scene-card" data-room="living">
@@ -1268,7 +1280,7 @@ async function loadManagedMemories() {
     state.managedMemories = { ordinary: [], sensitive_history: [], current_state: [], expired_current_count: 0 }
     return
   }
-  const res = await fetch('/api/memories?mode=manage')
+  const res = await apiFetch('/api/memories?mode=manage')
   if (!res.ok) throw new Error(`Memory API ${res.status}`)
   state.managedMemories = await res.json()
 }
@@ -1384,7 +1396,7 @@ async function autoReplyInRoom(roomId, key, threadId) {
 async function checkProactiveMessage() {
   if (!USE_API) return
   try {
-    const res = await fetch('/api/muse-proactive?mode=poll')
+    const res = await apiFetch('/api/muse-proactive?mode=poll')
     if (!res.ok) return
     const data = await res.json()
     if (!data?.message?.text) return
@@ -1416,6 +1428,7 @@ function render() {
       })
     })
     checkProactiveMessage()
+    document.getElementById('sign-out-btn')?.addEventListener('click', () => supabase.auth.signOut())
 
     const goOutBtn = document.getElementById('go-out-btn')
     const goOutInput = document.getElementById('go-out-input')
@@ -1427,7 +1440,7 @@ function render() {
       goOutBtn.textContent = '出门中…'
       goOutResult.hidden = true
       try {
-        const res = await fetch('/api/muse-proactive?mode=go-out', {
+        const res = await apiFetch('/api/muse-proactive?mode=go-out', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ destination }),
@@ -1634,7 +1647,7 @@ function render() {
       testBtn.textContent = '检索中…'
       graphWrap?.querySelectorAll('.memory-node--lit').forEach(node => node.classList.remove('memory-node--lit'))
       try {
-        const res = await fetch(`/api/memories?query=${encodeURIComponent(q)}`)
+        const res = await apiFetch(`/api/memories?query=${encodeURIComponent(q)}`)
         if (!res.ok) throw new Error(`API ${res.status}`)
         const result = await res.json()
         for (const topic of result.lit_topics || []) {
@@ -1685,7 +1698,7 @@ function render() {
         btn.disabled = true
         btn.textContent = '检测中…'
         try {
-          const res = await fetch(`/api/memories?mode=dedupe-scan&type=${type}`)
+          const res = await apiFetch(`/api/memories?mode=dedupe-scan&type=${type}`)
           if (!res.ok) throw new Error(`API ${res.status}`)
           const result = await res.json()
           const originals = state.managedMemories?.[type] || []
@@ -1715,7 +1728,7 @@ function render() {
         retrieval_tags: (group.querySelector('.dedupe-tags-input')?.value || '').split(/[,，]/).map(tag => tag.trim()).filter(Boolean),
       }
       try {
-        const res = await fetch('/api/memories?action=merge-duplicates', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+        const res = await apiFetch('/api/memories?action=merge-duplicates', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
         if (!res.ok) throw new Error(`API ${res.status}`)
         group.remove()
         await loadManagedMemories()
@@ -1746,7 +1759,7 @@ function render() {
         const statusInput = card.querySelector('.memory-status-input')
         if (statusInput) body.status = statusInput.value
         try {
-          const res = await fetch('/api/memories', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+          const res = await apiFetch('/api/memories', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
           if (!res.ok) throw new Error(`API ${res.status}`)
           saveBtn.textContent = '已保存 ✓'
           setTimeout(() => { saveBtn.disabled = false; saveBtn.textContent = '保存修改' }, 1200)
@@ -1758,7 +1771,7 @@ function render() {
       if (deleteBtn) {
         if (!window.confirm('删除这条长期记忆吗？')) return
         deleteBtn.disabled = true
-        const res = await fetch('/api/memories', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, id }) })
+        const res = await apiFetch('/api/memories', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, id }) })
         if (!res.ok) { deleteBtn.disabled = false; return }
         card.remove()
       }
@@ -1922,4 +1935,35 @@ function render() {
   }
 }
 
-render()
+// ── Auth gate ───────────────────────────────────────────────────────────────
+
+function renderLoginScreen(message) {
+  document.getElementById('app').innerHTML = `
+    <div class="login-screen">
+      <h1 class="login-title">Muse & Yuxin</h1>
+      <p class="login-subtitle">我们共同的小角落</p>
+      ${message ? `<p class="login-message">${esc(message)}</p>` : ''}
+      <button id="google-login-btn" class="login-btn">用 Google 登录</button>
+    </div>`
+  document.getElementById('google-login-btn').addEventListener('click', () => {
+    supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } })
+  })
+}
+
+async function boot() {
+  if (!USE_API) { render(); return }
+  const { data: { session } } = await supabase.auth.getSession()
+  const email = session?.user?.email?.toLowerCase()
+  if (session && email && ALLOWED_EMAILS.has(email)) {
+    render()
+  } else if (session) {
+    renderLoginScreen('这个 Google 账号没有权限访问这个网站。')
+  } else {
+    renderLoginScreen()
+  }
+}
+
+supabase.auth.onAuthStateChange(event => {
+  if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') boot()
+})
+boot()

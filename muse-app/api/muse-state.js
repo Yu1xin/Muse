@@ -1,3 +1,5 @@
+import { requireUser } from './_auth.js'
+
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
 const STATE_KEY = 'muse-autonomy-state-v1'
@@ -68,6 +70,7 @@ function decayedState(raw) {
 
 export default async function handler(req, res) {
   try {
+    if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
     if (req.method === 'GET') return res.json(decayedState(await redisGet(STATE_KEY)))
 
     if (req.method === 'PUT') {

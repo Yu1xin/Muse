@@ -1,4 +1,5 @@
 import { TOPIC_PATHS, VALID_TOPIC_PATHS } from './_topics.js'
+import { requireUser } from './_auth.js'
 
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
@@ -459,6 +460,7 @@ async function maybeWriteDiaryEntry({ force = false } = {}) {
 }
 
 export default async function handler(req, res) {
+  if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
   const { room } = req.query
   if (!room) return res.status(400).json({ error: 'room required' })
 

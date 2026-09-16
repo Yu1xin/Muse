@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { Readable } from 'node:stream'
 import { get, put } from '@vercel/blob'
+import { requireUser } from './_auth.js'
 
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
@@ -57,6 +58,7 @@ function safeId(value) {
 export default async function handler(req, res) {
   try {
     if (req.method === 'POST') {
+      if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
       if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.BLOB_STORE_ID) {
         return res.status(503).json({ error: 'Private image storage is not connected yet' })
       }

@@ -1,3 +1,5 @@
+import { requireUser } from './_auth.js'
+
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY
@@ -173,17 +175,18 @@ async function runProactiveTick() {
 
 export default async function handler(req, res) {
   try {
+    if (req.query?.mode === 'tick') {
+      if (!CRON_SECRET || req.headers.authorization !== `Bearer ${CRON_SECRET}`) return res.status(401).json({ error: 'Unauthorized' })
+      const result = await runProactiveTick()
+      return res.json(result)
+    }
+    if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
     if (req.query?.mode === 'poll') {
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
       const pending = await redisGetObject(PENDING_KEY)
       if (!pending) return res.json({ message: null })
       await redisDel(PENDING_KEY)
       return res.json({ message: pending })
-    }
-    if (req.query?.mode === 'tick') {
-      if (!CRON_SECRET || req.headers.authorization !== `Bearer ${CRON_SECRET}`) return res.status(401).json({ error: 'Unauthorized' })
-      const result = await runProactiveTick()
-      return res.json(result)
     }
     if (req.query?.mode === 'go-out') {
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
