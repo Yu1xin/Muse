@@ -46,8 +46,13 @@ async function semanticMemoryRoute(query, memories) {
   }
 }
 
-async function scanDuplicates(memories) {
-  if (memories.length < 2) return []
+function chunkArray(array, size) {
+  const chunks = []
+  for (let index = 0; index < array.length; index += size) chunks.push(array.slice(index, index + size))
+  return chunks
+}
+
+async function scanDuplicatesChunk(memories) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -67,6 +72,7 @@ async function scanDuplicates(memories) {
   })
   const data = await response.json()
   if (!response.ok) throw new Error(`API ${response.status}`)
+  if (data.stop_reason === 'max_tokens') throw new Error('dedupe scan hit token limit; refusing partial JSON')
   const text = (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('')
   const parsed = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))
   const validIds = new Set(memories.map(item => String(item.id)))
@@ -78,6 +84,20 @@ async function scanDuplicates(memories) {
       merged_tags: Array.isArray(group.merged_tags) ? group.merged_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 6) : [],
     }))
     .filter(group => group.ids.length >= 2 && group.merged_title && group.merged_summary)
+}
+
+async function scanDuplicates(memories) {
+  if (memories.length < 2) return []
+  const groups = []
+  for (const chunk of chunkArray(memories, 40)) {
+    if (chunk.length < 2) continue
+    try {
+      groups.push(...await scanDuplicatesChunk(chunk))
+    } catch (error) {
+      console.error('[memory-dedupe-scan] chunk failed', { message: error?.message || String(error) })
+    }
+  }
+  return groups
 }
 
 async function fetchMemoriesByType(type) {
