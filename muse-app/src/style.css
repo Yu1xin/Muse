@@ -711,8 +711,36 @@ input[type="text"]::placeholder { color: var(--text-muted); }
 
 .inline-row {
   display: flex;
+  align-items: center;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.t-attach-btn {
+  align-items: center;
+  background: rgba(50, 29, 62, 0.9);
+  border: 1px solid rgba(113, 75, 133, 0.5);
+  border-radius: 16px;
+  color: #d2b1df;
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 32px;
+  font-size: 15px;
+  height: 32px;
+  justify-content: center;
+  margin-right: auto;
+  padding: 0;
+}
+
+.inline-attachment-preview {
+  background: none;
+  border-top: none;
+  padding: 0;
+}
+
+.inline-attachment-preview .attachment-preview-item {
+  flex: 0 0 56px;
+  height: 56px;
 }
 
 .t-cancel-btn, .t-send-btn {

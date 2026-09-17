@@ -748,8 +748,11 @@ function threadHTML({ threadId, msgs: tMsgs }) {
       <button class="thread-btn t-user-btn" data-thread="${threadId}">我来说</button>
     </div>
     <div class="thread-inline" id="ir-${threadId}" hidden>
+      <div class="attachment-preview inline-attachment-preview" id="ir-preview-${threadId}" hidden></div>
       <textarea class="inline-input" placeholder="说点什么…" rows="2" enterkeyhint="send"></textarea>
       <div class="inline-row">
+        <button type="button" class="t-attach-btn" data-thread="${threadId}" title="添加图片" aria-label="添加图片">📎</button>
+        <input type="file" class="inline-image-input" data-thread="${threadId}" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
         <button class="t-cancel-btn" data-thread="${threadId}">取消</button>
         <button class="t-send-btn" data-thread="${threadId}">发送</button>
       </div>
@@ -893,11 +896,11 @@ function readImageDimensions(file) {
   })
 }
 
-function renderAttachmentPreview() {
-  const preview = document.getElementById('attachment-preview')
+function renderAttachmentPreviewInto(elementId, images) {
+  const preview = document.getElementById(elementId)
   if (!preview) return
-  preview.hidden = state.composerImages.length === 0
-  preview.innerHTML = state.composerImages.map((item, index) => `
+  preview.hidden = images.length === 0
+  preview.innerHTML = images.map((item, index) => `
     <div class="attachment-preview-item">
       <img src="${item.previewUrl}" alt="待发送图片 ${index + 1}">
       <button type="button" class="remove-attachment" data-index="${index}" aria-label="移除图片">×</button>
@@ -905,9 +908,13 @@ function renderAttachmentPreview() {
   `).join('')
 }
 
-async function addComposerImages(files) {
+function renderAttachmentPreview() {
+  renderAttachmentPreviewInto('attachment-preview', state.composerImages)
+}
+
+async function addImagesToBucket(bucket, files) {
   const allowed = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
-  const remaining = 3 - state.composerImages.length
+  const remaining = 3 - bucket.length
   if (remaining <= 0) throw new Error('每条最多发3张图片')
   if (files.length > remaining) throw new Error('每条最多发3张图片')
   const additions = []
@@ -925,8 +932,30 @@ async function addComposerImages(files) {
     for (const item of additions) URL.revokeObjectURL(item.previewUrl)
     throw error
   }
-  state.composerImages.push(...additions)
+  bucket.push(...additions)
+}
+
+async function addComposerImages(files) {
+  await addImagesToBucket(state.composerImages, files)
   renderAttachmentPreview()
+}
+
+function inlineImageBucket(threadId) {
+  if (!state.inlineComposerImages[threadId]) state.inlineComposerImages[threadId] = []
+  return state.inlineComposerImages[threadId]
+}
+
+async function addInlineImages(threadId, files) {
+  const bucket = inlineImageBucket(threadId)
+  await addImagesToBucket(bucket, files)
+  renderAttachmentPreviewInto(`ir-preview-${threadId}`, bucket)
+}
+
+function clearInlineImages(threadId) {
+  const bucket = state.inlineComposerImages[threadId]
+  if (!bucket) return
+  for (const item of bucket) URL.revokeObjectURL(item.previewUrl)
+  delete state.inlineComposerImages[threadId]
 }
 
 function memoryCardHTML(memory) {
@@ -1268,6 +1297,7 @@ const state = {
   managedMemories: null,
   bookPage: { memory: 0, diary: 0 },
   composerImages: [],
+  inlineComposerImages: {},
   toolResults: {
     bar: '',
     study: '',
@@ -1528,14 +1558,25 @@ function render() {
       const input = el?.querySelector('.inline-input')
       const sendBtn = el?.querySelector('.t-send-btn')
       const text = input?.value.trim()
-      if (!text || sendBtn?.disabled) return
+      const selectedImages = [...(state.inlineComposerImages[tid] || [])]
+      if ((!text && !selectedImages.length) || sendBtn?.disabled) return
       if (sendBtn) sendBtn.disabled = true
-      await saveMessage(key, text, false, Number(tid))
-      document.getElementById('msg-list').innerHTML = msgListHTML(key)
       try {
-        await autoReplyInRoom(state.room, key, tid)
+        const attachments = await Promise.all(selectedImages.map(async item => {
+          if (!item.uploadedAttachment) item.uploadedAttachment = await uploadImage(item.file)
+          return item.uploadedAttachment
+        }))
+        await saveMessage(key, text, false, Number(tid), attachments)
+        clearInlineImages(tid)
         document.getElementById('msg-list').innerHTML = msgListHTML(key)
-      } catch {}
+        try {
+          await autoReplyInRoom(state.room, key, tid)
+          document.getElementById('msg-list').innerHTML = msgListHTML(key)
+        } catch {}
+      } catch (error) {
+        window.alert(error.message || '发送失败，请再试一次')
+        if (sendBtn) sendBtn.disabled = false
+      }
     }
 
     // Thread action buttons (event delegation)
@@ -1603,8 +1644,29 @@ function render() {
 
       const cancelBtn = e.target.closest('.t-cancel-btn')
       if (cancelBtn) {
-        const el = document.getElementById(`ir-${cancelBtn.dataset.thread}`)
+        const tid = cancelBtn.dataset.thread
+        const el = document.getElementById(`ir-${tid}`)
         if (el) el.hidden = true
+        clearInlineImages(tid)
+        return
+      }
+
+      const inlineAttachBtn = e.target.closest('.t-attach-btn')
+      if (inlineAttachBtn) {
+        const tid = inlineAttachBtn.dataset.thread
+        msgList.querySelector(`.inline-image-input[data-thread="${tid}"]`)?.click()
+        return
+      }
+
+      const removeInlineAttachment = e.target.closest('.inline-attachment-preview .remove-attachment')
+      if (removeInlineAttachment) {
+        const tid = removeInlineAttachment.closest('.thread-inline')?.id?.replace('ir-', '')
+        const bucket = tid ? state.inlineComposerImages[tid] : null
+        if (bucket) {
+          const [item] = bucket.splice(Number(removeInlineAttachment.dataset.index), 1)
+          if (item) URL.revokeObjectURL(item.previewUrl)
+          renderAttachmentPreviewInto(`ir-preview-${tid}`, bucket)
+        }
         return
       }
 
@@ -1612,6 +1674,15 @@ function render() {
       if (sendBtn) {
         await submitInlineReply(sendBtn.dataset.thread)
       }
+    })
+
+    msgList.addEventListener('change', async e => {
+      const input = e.target.closest('.inline-image-input')
+      if (!input) return
+      const tid = input.dataset.thread
+      try { await addInlineImages(tid, input.files || []) }
+      catch (error) { window.alert(error.message) }
+      input.value = ''
     })
 
     // 缪时写一条
