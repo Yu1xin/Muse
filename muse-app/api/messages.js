@@ -1,6 +1,9 @@
 import { TOPIC_PATHS, VALID_TOPIC_PATHS } from './_topics.js'
 import { requireUser } from './_auth.js'
+import { supabase } from './_supabase.js'
 
+// 日记缓冲区、记忆提取缓冲区、日记上次写入时间——这三个是内部处理用的临时队列，不是
+// 真正的用户数据，继续留在 Redis 里，没有随其他数据一起搬到 Supabase。
 const BASE = process.env.KV_REST_API_URL
 const TOKEN = process.env.KV_REST_API_TOKEN
 
@@ -13,11 +16,6 @@ const MEMORY_BATCH_SIZE = 20
 const CONVERSATION_SUMMARY_BATCH_SIZE = 30
 const DIARY_MAX_TOKENS = 1600
 const DIARY_CONTINUATION_MAX_TOKENS = 900
-const MEMORY_KEYS = {
-  ordinary: 'memory-v1-ordinary',
-  sensitive_history: 'memory-v1-sensitive-history',
-  current_state: 'memory-v1-current-state',
-}
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
 const CONVERSATION_SUMMARY_SYSTEM = `你是缪时的短期对话压缩器。把恰好30条原始消息写成一段独立、简洁、准确的近期印象，供缪时继续当前这一次聊天。
@@ -63,6 +61,103 @@ async function redisSet(key, value) {
   })
 }
 
+function formatTime(iso) {
+  return new Date(iso).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function rowToMessage(row) {
+  return {
+    id: row.id,
+    text: row.text,
+    ...(row.attachments ? { attachments: row.attachments } : {}),
+    fromMuse: row.from_muse,
+    ...(row.kind ? { kind: row.kind } : {}),
+    ...(row.visual_note ? { visualNote: row.visual_note } : {}),
+    threadId: row.thread_id,
+    time: formatTime(row.created_at),
+  }
+}
+
+async function fetchRoomMessages(room) {
+  const { data, error } = await supabase.from('messages').select('*').eq('room', room).order('id', { ascending: false })
+  if (error) throw new Error(`messages read failed (${room}): ${error.message}`)
+  return (data || []).map(rowToMessage)
+}
+
+async function insertMessage(room, msg) {
+  const { error } = await supabase.from('messages').insert({
+    id: msg.id,
+    room,
+    text: msg.text,
+    attachments: msg.attachments || null,
+    from_muse: msg.fromMuse,
+    kind: msg.kind || null,
+    thread_id: msg.threadId,
+  })
+  if (error) throw new Error(`messages insert failed: ${error.message}`)
+}
+
+async function loadMediaRecord(id) {
+  const { data, error } = await supabase.from('media').select('*').eq('id', id).maybeSingle()
+  if (error) throw new Error(`media read failed: ${error.message}`)
+  return data ? { pathname: data.pathname, mimeType: data.mime_type, bytes: data.bytes } : null
+}
+
+async function upsertMemoryRow(type, item) {
+  const { data: existing, error: selectError } = await supabase.from('memories').select('id').eq('type', type).eq('dedupe_key', item.dedupe_key).maybeSingle()
+  if (selectError) throw new Error(`memories lookup failed (${type}): ${selectError.message}`)
+  const row = {
+    type,
+    dedupe_key: item.dedupe_key,
+    title: item.title,
+    summary: item.summary,
+    retrieval_tags: item.retrieval_tags,
+    topics: item.topics ?? null,
+    occurred_at: item.occurred_at ?? null,
+    current_status: item.current_status ?? null,
+    interaction_implications: item.interaction_implications ?? null,
+    sensitivity: item.sensitivity ?? null,
+    status: item.status ?? null,
+    evidence: item.evidence ?? null,
+    confidence: item.confidence ?? null,
+    expires_at: item.expires_at ?? null,
+    source: item.source ?? null,
+    updated_at: item.updated_at,
+  }
+  if (existing) {
+    const { error } = await supabase.from('memories').update(row).eq('id', existing.id)
+    if (error) throw new Error(`memories update failed (${type}): ${error.message}`)
+  } else {
+    const { error } = await supabase.from('memories').insert({ ...row, id: item.id, created_at: item.created_at })
+    if (error) throw new Error(`memories insert failed (${type}): ${error.message}`)
+  }
+}
+
+async function fetchMemoriesByType(type) {
+  const { data, error } = await supabase.from('memories').select('id, dedupe_key, title').eq('type', type)
+  if (error) throw new Error(`memories read failed (${type}): ${error.message}`)
+  return data || []
+}
+
+async function loadSummaryState(room, threadId) {
+  const { data, error } = await supabase.from('conversation_summaries').select('*').eq('room', room).eq('thread_id', String(threadId)).maybeSingle()
+  if (error) throw new Error(`conversation_summaries read failed: ${error.message}`)
+  if (!data) return null
+  return { chunks: data.chunks || [], coveredThrough: data.covered_through, coveredCount: data.covered_count, updatedAt: data.updated_at }
+}
+
+async function saveSummaryState(room, threadId, state) {
+  const { error } = await supabase.from('conversation_summaries').upsert({
+    room,
+    thread_id: String(threadId),
+    chunks: state.chunks,
+    covered_through: state.coveredThrough,
+    covered_count: state.coveredCount,
+    updated_at: state.updatedAt,
+  })
+  if (error) throw new Error(`conversation_summaries write failed: ${error.message}`)
+}
+
 async function validAttachments(value) {
   if (!Array.isArray(value)) return []
   if (value.length > 3) throw new Error('Too many image attachments')
@@ -70,7 +165,7 @@ async function validAttachments(value) {
   for (const item of value) {
     const id = String(item?.id || '')
     if (!/^[a-f0-9-]{20,50}$/i.test(id)) throw new Error('Invalid image attachment')
-    const media = await redisGetObject(`media-v1-${id}`)
+    const media = await loadMediaRecord(id)
     if (!media?.pathname || !ALLOWED_IMAGE_TYPES.has(media.mimeType) || Number(media.bytes) > 3 * 1024 * 1024) {
       throw new Error('Image attachment not found')
     }
@@ -149,18 +244,13 @@ async function callClaude({ label, maxTokens, system, messages }) {
   return data
 }
 
-function conversationSummaryKey(room, threadId) {
-  return `conversation-summary-v1-${room}-${String(threadId).replace(/[^a-z0-9_-]/gi, '').slice(0, 100)}`
-}
-
 async function maybeSummarizeThread(room, threadId) {
   if (!ROOM_NAMES[room] || !threadId) return false
-  const messages = await redisGet(room)
+  const messages = await fetchRoomMessages(room)
   const thread = messages
     .filter(item => item.kind !== 'status' && String(item.threadId || item.id) === String(threadId))
     .sort((a, b) => Number(a.id) - Number(b.id))
-  const key = conversationSummaryKey(room, threadId)
-  const existing = await redisGetObject(key)
+  const existing = await loadSummaryState(room, threadId)
   const chunks = Array.isArray(existing?.chunks) ? existing.chunks : []
   const uncovered = thread.filter(item => Number(item.id) > Number(existing?.coveredThrough || 0))
   if (uncovered.length < CONVERSATION_SUMMARY_BATCH_SIZE) return false
@@ -180,7 +270,7 @@ async function maybeSummarizeThread(room, threadId) {
   const keywords = (output.match(/<keywords>\s*([\s\S]*?)\s*<\/keywords>/i)?.[1] || '')
     .split('|').map(item => item.trim()).filter(Boolean).slice(0, 12)
   if (!summary) throw new Error('conversation summary returned no text')
-  await redisSet(key, {
+  await saveSummaryState(room, threadId, {
     chunks: [...chunks, {
       id: `chunk-${batch[0].id}-${batch.at(-1).id}`,
       startId: batch[0].id,
@@ -264,25 +354,13 @@ function cleanTopicArray(value) {
   return topics.length ? topics.slice(0, 3) : ['日常']
 }
 
-async function upsertMemory(key, item) {
-  const existing = await redisGet(key)
-  const memories = Array.isArray(existing) ? existing : []
-  const index = memories.findIndex(memory => memory.dedupe_key === item.dedupe_key)
-  if (index >= 0) {
-    memories[index] = { ...memories[index], ...item, id: memories[index].id, created_at: memories[index].created_at, updated_at: new Date().toISOString() }
-  } else {
-    memories.unshift(item)
-  }
-  await redisSet(key, memories.slice(0, 250))
-}
-
 async function extractAndStoreMemories(batch, diaryText = '') {
   const transcript = batch
       .map(m => `${ROOM_NAMES[m.room] || m.room}|时间:${m.time || '不详'}|${m.fromMuse ? '缪时' : '小乖'}|${m.text || ''}${m.attachmentCount ? ` [图片${m.attachmentCount}张${m.visualNote ? `：${m.visualNote}` : ''}]` : ''}`)
     .join('\n')
   const [existingOrdinary, existingHistorical] = await Promise.all([
-    redisGet(MEMORY_KEYS.ordinary),
-    redisGet(MEMORY_KEYS.sensitive_history),
+    fetchMemoriesByType('ordinary'),
+    fetchMemoriesByType('sensitive_history'),
   ])
   const existingIndex = [...existingOrdinary, ...existingHistorical]
     .slice(0, 200)
@@ -303,7 +381,7 @@ async function extractAndStoreMemories(batch, diaryText = '') {
   const now = new Date()
   let storedCount = 0
   for (const candidate of candidates) {
-    if (!candidate || candidate.type === 'discard' || !MEMORY_KEYS[candidate.type]) continue
+    if (!candidate || !['ordinary', 'sensitive_history', 'current_state'].includes(candidate.type)) continue
     const base = {
       id: uniqueId(candidate.type),
       type: candidate.type,
@@ -318,7 +396,7 @@ async function extractAndStoreMemories(batch, diaryText = '') {
     }
     if (!base.dedupe_key || !base.title || !base.summary) continue
     if (candidate.type === 'sensitive_history') {
-      await upsertMemory(MEMORY_KEYS.sensitive_history, {
+      await upsertMemoryRow('sensitive_history', {
         ...base,
         occurred_at: String(candidate.occurred_at || '时间不详').slice(0, 120),
         current_status: 'historical',
@@ -328,7 +406,7 @@ async function extractAndStoreMemories(batch, diaryText = '') {
       storedCount += 1
     } else if (candidate.type === 'current_state') {
       const hours = Math.min(72, Math.max(1, Number(candidate.expires_in_hours) || 24))
-      await upsertMemory(MEMORY_KEYS.current_state, {
+      await upsertMemoryRow('current_state', {
         ...base,
         status: String(candidate.status || '').trim().slice(0, 240),
         evidence: String(candidate.evidence || '').trim().slice(0, 400),
@@ -337,7 +415,7 @@ async function extractAndStoreMemories(batch, diaryText = '') {
       })
       storedCount += 1
     } else {
-      await upsertMemory(MEMORY_KEYS.ordinary, base)
+      await upsertMemoryRow('ordinary', base)
       storedCount += 1
     }
   }
@@ -421,19 +499,8 @@ async function maybeWriteDiaryEntry({ force = false } = {}) {
     }
     if (!diaryText) throw new Error('diary returned no text')
 
-    const diaryMessages = await redisGet(DIARY_ROOM_KEY)
     const id = Date.now()
-    diaryMessages.unshift({
-      id,
-      text: diaryText,
-      fromMuse: true,
-      threadId: id,
-      time: new Date().toLocaleString('zh-CN', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit',
-      }),
-    })
-    await redisSet(DIARY_ROOM_KEY, diaryMessages)
+    await insertMessage(DIARY_ROOM_KEY, { id, text: diaryText, fromMuse: true, threadId: id })
     await redisSet(DIARY_LAST_WRITTEN_KEY, { at: new Date().toISOString(), reason: force ? 'muse-event' : 'message-threshold' })
     diarySaved = true
 
@@ -464,6 +531,7 @@ export default async function handler(req, res) {
   const { room } = req.query
   if (!room) return res.status(400).json({ error: 'room required' })
 
+  try {
   if (req.method === 'POST' && req.query?.action === 'write-diary') {
     const written = await maybeWriteDiaryEntry({ force: true })
     return res.json({ written })
@@ -480,7 +548,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET' && req.query?.action === 'context') {
-    const summaryState = await redisGetObject(conversationSummaryKey(room, req.query?.threadId))
+    const summaryState = await loadSummaryState(room, req.query?.threadId)
     const chunks = await selectSummaryChunks(Array.isArray(summaryState?.chunks) ? summaryState.chunks : [], String(req.query?.query || ''))
     return res.json({
       summaries: chunks.map(chunk => ({ id: chunk.id, summary: chunk.summary, keywords: chunk.keywords || [] })),
@@ -491,7 +559,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    const messages = await redisGet(room)
+    const messages = await fetchRoomMessages(room)
     return res.json(messages)
   }
 
@@ -505,7 +573,6 @@ export default async function handler(req, res) {
       ? Array.from(String(text).trim()).slice(0, 10).join('')
       : String(text).trim().slice(0, 8000)
     if (!cleanText && !attachments.length) return res.status(400).json({ error: 'text or image required' })
-    const messages = await redisGet(room)
     const id = Date.now()
     const newMsg = {
       id,
@@ -514,13 +581,9 @@ export default async function handler(req, res) {
       fromMuse,
       ...(kind === 'status' ? { kind } : {}),
       threadId: threadId || id,
-      time: new Date().toLocaleString('zh-CN', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit',
-      }),
+      time: formatTime(new Date().toISOString()),
     }
-    messages.unshift(newMsg)
-    await redisSet(room, messages)
+    await insertMessage(room, newMsg)
 
     // Feed the global diary buffer (skip the diary room itself to avoid feedback loops)
     // and diary-related "tool rooms" have no chat messages anyway.
@@ -541,11 +604,11 @@ export default async function handler(req, res) {
     const id = Number(req.body?.id)
     const visualNote = String(req.body?.visualNote || '').trim().slice(0, 300)
     if (!id || !visualNote) return res.status(400).json({ error: 'id and visualNote required' })
-    const messages = await redisGet(room)
-    const message = messages.find(item => Number(item.id) === id)
-    if (!message || !message.attachments?.length || message.fromMuse) return res.status(404).json({ error: 'Image message not found' })
-    message.visualNote = visualNote
-    await redisSet(room, messages)
+    const { data: message, error: fetchError } = await supabase.from('messages').select('*').eq('room', room).eq('id', id).maybeSingle()
+    if (fetchError) throw new Error(`messages read failed: ${fetchError.message}`)
+    if (!message?.attachments?.length || message.from_muse) return res.status(404).json({ error: 'Image message not found' })
+    const { error: updateError } = await supabase.from('messages').update({ visual_note: visualNote }).eq('room', room).eq('id', id)
+    if (updateError) throw new Error(`messages update failed: ${updateError.message}`)
     const buffer = await redisGet(DIARY_BUFFER_KEY)
     const buffered = buffer.find(item => Number(item.messageId) === id)
     if (buffered) {
@@ -558,11 +621,14 @@ export default async function handler(req, res) {
   if (req.method === 'DELETE') {
     const id = Number(req.body?.id ?? req.query.id)
     if (!id) return res.status(400).json({ error: 'id required' })
-    const messages = await redisGet(room)
-    const nextMessages = messages.filter(message => Number(message.id) !== id)
-    await redisSet(room, nextMessages)
+    const { error } = await supabase.from('messages').delete().eq('room', room).eq('id', id)
+    if (error) throw new Error(`messages delete failed: ${error.message}`)
     return res.json({ ok: true })
   }
 
   res.status(405).end()
+  } catch (error) {
+    console.error('[messages] request failed', { message: error?.message || String(error) })
+    return res.status(500).json({ error: 'Request failed' })
+  }
 }

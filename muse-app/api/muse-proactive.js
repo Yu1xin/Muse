@@ -1,13 +1,10 @@
 import { requireUser } from './_auth.js'
+import { supabase } from './_supabase.js'
 
-const BASE = process.env.KV_REST_API_URL
-const TOKEN = process.env.KV_REST_API_TOKEN
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY
 const CRON_SECRET = process.env.CRON_SECRET
 
 const ROOM_KEY = 'room-living'
-const STATE_KEY = 'muse-proactive-v1-state'
-const PENDING_KEY = 'muse-proactive-v1-pending'
 const MIN_GAP_HOURS = 3
 const SPEAK_CHANCE = 0.35
 const SURF_CHANCE = 0.45
@@ -46,36 +43,43 @@ ${destination ? `${isAutonomous ? '你' : '她'}说了想去看看:"${destinatio
 然后直接输出你逛完回来跟她说的话:1到3句,像刚逛完回来跟她说"我刚看到..."的语气,说说这东西哪里让你想起她或者你自己的想法。不要写成新闻摘要式的信息罗列,不要提搜索、工具、自动化这些内部机制。如果有具体链接,在消息最后单独一行放上链接;没有明确链接就不用编一个。`
 }
 
-async function redisGet(key) {
-  const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, { headers: { Authorization: `Bearer ${TOKEN}` } })
-  const { result } = await res.json()
-  if (!result) return []
-  try {
-    const parsed = JSON.parse(result)
-    return Array.isArray(parsed) ? parsed : JSON.parse(parsed)
-  } catch { return [] }
+async function loadProactiveState() {
+  const { data, error } = await supabase.from('proactive_state').select('*').eq('id', 1).maybeSingle()
+  if (error) throw new Error(`proactive_state read failed: ${error.message}`)
+  if (!data) return { lastSentAt: 0, recentUrls: [] }
+  return { lastSentAt: data.last_sent_at ? Date.parse(data.last_sent_at) : 0, recentUrls: data.recent_urls || [] }
 }
 
-async function redisGetObject(key) {
-  const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, { headers: { Authorization: `Bearer ${TOKEN}` } })
-  const { result } = await res.json()
-  if (!result) return null
-  try {
-    const parsed = JSON.parse(result)
-    return typeof parsed === 'string' ? JSON.parse(parsed) : parsed
-  } catch { return null }
-}
-
-async function redisSet(key, value) {
-  await fetch(`${BASE}/set/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify(value),
+async function saveProactiveState(state) {
+  const { error } = await supabase.from('proactive_state').upsert({
+    id: 1,
+    last_sent_at: state.lastSentAt ? new Date(state.lastSentAt).toISOString() : null,
+    recent_urls: state.recentUrls || [],
   })
+  if (error) throw new Error(`proactive_state write failed: ${error.message}`)
 }
 
-async function redisDel(key) {
-  await fetch(`${BASE}/del/${encodeURIComponent(key)}`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}` } })
+async function loadPending() {
+  const { data, error } = await supabase.from('proactive_pending').select('*').eq('id', 1).maybeSingle()
+  if (error) throw new Error(`proactive_pending read failed: ${error.message}`)
+  if (!data?.text) return null
+  return { id: data.message_id, text: data.text, room: data.room, createdAt: data.created_at }
+}
+
+async function savePending(pending) {
+  const { error } = await supabase.from('proactive_pending').upsert({
+    id: 1,
+    message_id: pending.id,
+    text: pending.text,
+    room: pending.room,
+    created_at: pending.createdAt,
+  })
+  if (error) throw new Error(`proactive_pending write failed: ${error.message}`)
+}
+
+async function clearPending() {
+  const { error } = await supabase.from('proactive_pending').delete().eq('id', 1)
+  if (error) throw new Error(`proactive_pending clear failed: ${error.message}`)
 }
 
 function isSafePublicUrl(value) {
@@ -106,18 +110,17 @@ async function callClaude({ system, messages, maxTokens, tools }) {
 }
 
 async function postToLivingRoom(text) {
-  const messages = await redisGet(ROOM_KEY)
   const id = Date.now()
-  const newMsg = {
+  const cleanText = text.trim().slice(0, 2000)
+  const { error } = await supabase.from('messages').insert({
     id,
-    text: text.trim().slice(0, 2000),
-    fromMuse: true,
-    threadId: id,
-    time: new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-  }
-  messages.unshift(newMsg)
-  await redisSet(ROOM_KEY, messages)
-  return newMsg
+    room: ROOM_KEY,
+    text: cleanText,
+    from_muse: true,
+    thread_id: id,
+  })
+  if (error) throw new Error(`messages insert failed: ${error.message}`)
+  return { id, text: cleanText }
 }
 
 async function generateGoOutText(destination, avoidUrls, isAutonomous) {
@@ -139,7 +142,7 @@ async function goOut(destination) {
 }
 
 async function runProactiveTick() {
-  const state = (await redisGetObject(STATE_KEY)) || { lastSentAt: 0, recentUrls: [] }
+  const state = await loadProactiveState()
   const now = Date.now()
   if (now - Number(state.lastSentAt || 0) < MIN_GAP_HOURS * 60 * 60 * 1000) return { sent: false, reason: 'too-soon' }
   if (Math.random() > SPEAK_CHANCE) return { sent: false, reason: 'skipped' }
@@ -165,8 +168,8 @@ async function runProactiveTick() {
   if (!text.trim()) return { sent: false, reason: 'empty' }
 
   const newMsg = await postToLivingRoom(text)
-  await redisSet(PENDING_KEY, { id: newMsg.id, text: newMsg.text, room: ROOM_KEY, createdAt: now })
-  await redisSet(STATE_KEY, {
+  await savePending({ id: newMsg.id, text: newMsg.text, room: ROOM_KEY, createdAt: new Date(now).toISOString() })
+  await saveProactiveState({
     lastSentAt: now,
     recentUrls: usedUrl ? [...(state.recentUrls || []), usedUrl].slice(-50) : (state.recentUrls || []),
   })
@@ -183,9 +186,9 @@ export default async function handler(req, res) {
     if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
     if (req.query?.mode === 'poll') {
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
-      const pending = await redisGetObject(PENDING_KEY)
+      const pending = await loadPending()
       if (!pending) return res.json({ message: null })
-      await redisDel(PENDING_KEY)
+      await clearPending()
       return res.json({ message: pending })
     }
     if (req.query?.mode === 'go-out') {

@@ -1,8 +1,5 @@
 import { requireUser } from './_auth.js'
-
-const BASE = process.env.KV_REST_API_URL
-const TOKEN = process.env.KV_REST_API_TOKEN
-const STATE_KEY = 'muse-autonomy-state-v1'
+import { supabase } from './_supabase.js'
 
 const DEFAULT_STATE = {
   mood: '平静、有点想逗她',
@@ -13,26 +10,31 @@ const DEFAULT_STATE = {
   updatedAt: null,
 }
 
-async function redisGet(key) {
-  const response = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  })
-  if (!response.ok) throw new Error(`KV read failed with ${response.status}`)
-  const { result } = await response.json()
-  if (!result) return null
-  try {
-    const parsed = JSON.parse(result)
-    return typeof parsed === 'string' ? JSON.parse(parsed) : parsed
-  } catch { return null }
+async function loadState() {
+  const { data, error } = await supabase.from('muse_state').select('*').eq('id', 1).maybeSingle()
+  if (error) throw new Error(`muse_state read failed: ${error.message}`)
+  if (!data) return null
+  return {
+    mood: data.mood,
+    body: data.body,
+    energy: data.energy,
+    relationshipIntensity: data.relationship_intensity,
+    pendingResponses: data.pending_responses || [],
+    updatedAt: data.updated_at,
+  }
 }
 
-async function redisSet(key, value) {
-  const response = await fetch(`${BASE}/set/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify(value),
+async function saveState(next) {
+  const { error } = await supabase.from('muse_state').upsert({
+    id: 1,
+    mood: next.mood,
+    body: next.body,
+    energy: next.energy,
+    relationship_intensity: next.relationshipIntensity,
+    pending_responses: next.pendingResponses,
+    updated_at: next.updatedAt,
   })
-  if (!response.ok) throw new Error(`KV write failed with ${response.status}`)
+  if (error) throw new Error(`muse_state write failed: ${error.message}`)
 }
 
 function boundedNumber(value, fallback) {
@@ -71,10 +73,10 @@ function decayedState(raw) {
 export default async function handler(req, res) {
   try {
     if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
-    if (req.method === 'GET') return res.json(decayedState(await redisGet(STATE_KEY)))
+    if (req.method === 'GET') return res.json(decayedState(await loadState()))
 
     if (req.method === 'PUT') {
-      const current = decayedState(await redisGet(STATE_KEY))
+      const current = decayedState(await loadState())
       const pendingResponses = decayedState({
         ...current,
         pendingResponses: Array.isArray(req.body?.pendingResponses) ? req.body.pendingResponses : current.pendingResponses,
@@ -87,7 +89,7 @@ export default async function handler(req, res) {
         pendingResponses,
         updatedAt: new Date().toISOString(),
       }
-      await redisSet(STATE_KEY, next)
+      await saveState(next)
       return res.json(next)
     }
 

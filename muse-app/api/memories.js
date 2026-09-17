@@ -1,14 +1,8 @@
 import { TOPIC_TAXONOMY, matchTopicsInText, inferTopics, buildTopicGraph } from './_topics.js'
 import { requireUser } from './_auth.js'
+import { supabase } from './_supabase.js'
 
-const BASE = process.env.KV_REST_API_URL
-const TOKEN = process.env.KV_REST_API_TOKEN
-
-const MEMORY_KEYS = {
-  ordinary: 'memory-v1-ordinary',
-  sensitive_history: 'memory-v1-sensitive-history',
-  current_state: 'memory-v1-current-state',
-}
+const MEMORY_TYPES = new Set(['ordinary', 'sensitive_history', 'current_state'])
 
 const MEMORY_ROUTER_SYSTEM = `根据当前消息，从长期记忆索引中选择语义相关的记忆。只输出相关记忆的 id，用英文逗号分隔；没有明确相关项就输出 NONE。最多选择4项，不要解释。不要因为同属一个宽泛topic就选择不相关内容。`
 
@@ -86,32 +80,10 @@ async function scanDuplicates(memories) {
     .filter(group => group.ids.length >= 2 && group.merged_title && group.merged_summary)
 }
 
-async function redisGet(key) {
-  const res = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  })
-  const { result } = await res.json()
-  if (!result) return []
-  try {
-    const parsed = JSON.parse(result)
-    return Array.isArray(parsed) ? parsed : JSON.parse(parsed)
-  } catch { return [] }
-}
-
-async function redisSet(key, value) {
-  const response = await fetch(`${BASE}/set/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(value),
-  })
-  if (!response.ok) throw new Error(`KV write failed with ${response.status}`)
-}
-
-function memoryKey(type) {
-  return MEMORY_KEYS[type] || null
+async function fetchMemoriesByType(type) {
+  const { data, error } = await supabase.from('memories').select('*').eq('type', type)
+  if (error) throw new Error(`memories read failed (${type}): ${error.message}`)
+  return data || []
 }
 
 function publicMemory(memory) {
@@ -201,72 +173,65 @@ export default async function handler(req, res) {
     if (!await requireUser(req)) return res.status(401).json({ error: 'Unauthorized' })
     if (req.method === 'PATCH') {
       const { id, type, title, summary, retrieval_tags = [], interaction_implications, status, evidence } = req.body || {}
-      const key = memoryKey(type)
-      if (!key || !id) return res.status(400).json({ error: 'Valid type and id are required' })
-      const memories = await redisGet(key)
-      const index = memories.findIndex(memory => memory.id === id)
-      if (index < 0) return res.status(404).json({ error: 'Memory not found' })
-      memories[index] = {
-        ...memories[index],
-        title: String(title ?? memories[index].title).trim().slice(0, 160),
-        summary: String(summary ?? memories[index].summary).trim().slice(0, 800),
-        retrieval_tags: Array.isArray(retrieval_tags) ? retrieval_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8) : memories[index].retrieval_tags,
+      if (!MEMORY_TYPES.has(type) || !id) return res.status(400).json({ error: 'Valid type and id are required' })
+      const { data: existing, error: fetchError } = await supabase.from('memories').select('*').eq('id', id).eq('type', type).maybeSingle()
+      if (fetchError) throw new Error(`memories read failed: ${fetchError.message}`)
+      if (!existing) return res.status(404).json({ error: 'Memory not found' })
+      const patch = {
+        title: String(title ?? existing.title).trim().slice(0, 160),
+        summary: String(summary ?? existing.summary).trim().slice(0, 800),
+        retrieval_tags: Array.isArray(retrieval_tags) ? retrieval_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8) : existing.retrieval_tags,
         ...(interaction_implications !== undefined ? { interaction_implications: Array.isArray(interaction_implications) ? interaction_implications.map(item => String(item).trim()).filter(Boolean).slice(0, 8) : [] } : {}),
         ...(status !== undefined ? { status: String(status).trim().slice(0, 240) } : {}),
         ...(evidence !== undefined ? { evidence: String(evidence).trim().slice(0, 400) } : {}),
         updated_at: new Date().toISOString(),
       }
-      if (!memories[index].title || !memories[index].summary) return res.status(400).json({ error: 'Title and summary cannot be empty' })
-      await redisSet(key, memories)
-      return res.json({ memory: publicMemory(memories[index]) })
+      if (!patch.title || !patch.summary) return res.status(400).json({ error: 'Title and summary cannot be empty' })
+      const { data: updated, error: updateError } = await supabase.from('memories').update(patch).eq('id', id).eq('type', type).select().single()
+      if (updateError) throw new Error(`memories update failed: ${updateError.message}`)
+      return res.json({ memory: publicMemory(updated) })
     }
 
     if (req.method === 'DELETE') {
       const { id, type } = req.body || {}
-      const key = memoryKey(type)
-      if (!key || !id) return res.status(400).json({ error: 'Valid type and id are required' })
-      const memories = await redisGet(key)
-      const next = memories.filter(memory => memory.id !== id)
-      if (next.length === memories.length) return res.status(404).json({ error: 'Memory not found' })
-      await redisSet(key, next)
+      if (!MEMORY_TYPES.has(type) || !id) return res.status(400).json({ error: 'Valid type and id are required' })
+      const { data: deleted, error } = await supabase.from('memories').delete().eq('id', id).eq('type', type).select()
+      if (error) throw new Error(`memories delete failed: ${error.message}`)
+      if (!deleted?.length) return res.status(404).json({ error: 'Memory not found' })
       return res.json({ ok: true })
     }
 
     if (req.method === 'POST' && req.query?.action === 'merge-duplicates') {
       const { type, ids, title, summary, retrieval_tags = [] } = req.body || {}
-      const key = memoryKey(type)
-      if (!key || !Array.isArray(ids) || ids.length < 2) return res.status(400).json({ error: 'type and at least 2 ids are required' })
+      if (!MEMORY_TYPES.has(type) || !Array.isArray(ids) || ids.length < 2) return res.status(400).json({ error: 'type and at least 2 ids are required' })
       const cleanTitle = String(title || '').trim().slice(0, 160)
       const cleanSummary = String(summary || '').trim().slice(0, 800)
       if (!cleanTitle || !cleanSummary) return res.status(400).json({ error: 'Title and summary cannot be empty' })
-      const memories = await redisGet(key)
       const [keepId, ...removeIds] = ids.map(String)
-      const keepIndex = memories.findIndex(memory => String(memory.id) === keepId)
-      if (keepIndex < 0) return res.status(404).json({ error: 'Memory not found' })
-      memories[keepIndex] = {
-        ...memories[keepIndex],
+      const { data: updated, error: updateError } = await supabase.from('memories').update({
         title: cleanTitle,
         summary: cleanSummary,
-        retrieval_tags: Array.isArray(retrieval_tags) ? retrieval_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8) : memories[keepIndex].retrieval_tags,
+        retrieval_tags: Array.isArray(retrieval_tags) ? retrieval_tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8) : undefined,
         updated_at: new Date().toISOString(),
+      }).eq('id', keepId).eq('type', type).select().single()
+      if (updateError) throw new Error(`memories merge update failed: ${updateError.message}`)
+      if (!updated) return res.status(404).json({ error: 'Memory not found' })
+      if (removeIds.length) {
+        const { error: deleteError } = await supabase.from('memories').delete().eq('type', type).in('id', removeIds)
+        if (deleteError) throw new Error(`memories merge cleanup failed: ${deleteError.message}`)
       }
-      const removeSet = new Set(removeIds)
-      const next = memories.filter((memory, index) => index === keepIndex || !removeSet.has(String(memory.id)))
-      await redisSet(key, next)
-      return res.json({ memory: publicMemory(next.find(memory => String(memory.id) === keepId)) })
+      return res.json({ memory: publicMemory(updated) })
     }
 
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
     const query = String(req.query?.query || '').slice(0, 1000)
-    const [ordinaryRaw, historicalRaw, currentRaw] = await Promise.all([
-      redisGet(MEMORY_KEYS.ordinary),
-      redisGet(MEMORY_KEYS.sensitive_history),
-      redisGet(MEMORY_KEYS.current_state),
+    const [allOrdinary, allHistorical, allCurrent] = await Promise.all([
+      fetchMemoriesByType('ordinary'),
+      fetchMemoriesByType('sensitive_history'),
+      fetchMemoriesByType('current_state'),
     ])
     const now = Date.now()
-    const activeCurrent = (Array.isArray(currentRaw) ? currentRaw : []).filter(item => Date.parse(item.expires_at) > now)
-    const allOrdinary = Array.isArray(ordinaryRaw) ? ordinaryRaw : []
-    const allHistorical = Array.isArray(historicalRaw) ? historicalRaw : []
+    const activeCurrent = allCurrent.filter(item => Date.parse(item.expires_at) > now)
     if (req.query?.mode === 'manage') {
       return res.json({
         taxonomy: Object.entries(TOPIC_TAXONOMY).map(([name, def]) => ({
@@ -278,7 +243,7 @@ export default async function handler(req, res) {
         ordinary: [...allOrdinary].sort(newestFirst).map(publicMemory),
         sensitive_history: [...allHistorical].sort(newestFirst).map(publicMemory),
         current_state: activeCurrent.sort(newestFirst).map(publicMemory),
-        expired_current_count: Math.max(0, (Array.isArray(currentRaw) ? currentRaw.length : 0) - activeCurrent.length),
+        expired_current_count: Math.max(0, allCurrent.length - activeCurrent.length),
       })
     }
     if (req.query?.mode === 'dedupe-scan') {

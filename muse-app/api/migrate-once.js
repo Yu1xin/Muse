@@ -69,6 +69,7 @@ async function migrateMemories() {
       title: String(m.title || ''),
       summary: String(m.summary || ''),
       retrieval_tags: m.retrieval_tags || [],
+      topics: m.topics || null,
       occurred_at: m.occurred_at || null,
       current_status: m.current_status || null,
       interaction_implications: m.interaction_implications || null,

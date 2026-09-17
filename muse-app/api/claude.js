@@ -1,25 +1,15 @@
 import { get } from '@vercel/blob'
 import { requireUser } from './_auth.js'
+import { supabase } from './_supabase.js'
 
-const BASE = process.env.KV_REST_API_URL
-const TOKEN = process.env.KV_REST_API_TOKEN
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
-
-async function redisGet(key) {
-  const response = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  })
-  if (!response.ok) throw new Error(`KV read failed with ${response.status}`)
-  const { result } = await response.json()
-  if (!result) return null
-  const parsed = JSON.parse(result)
-  return typeof parsed === 'string' ? JSON.parse(parsed) : parsed
-}
 
 async function storedImageBlock(id) {
   const safeId = String(id || '')
   if (!/^[a-f0-9-]{20,50}$/i.test(safeId)) throw new Error('Invalid stored image id')
-  const media = await redisGet(`media-v1-${safeId}`)
+  const { data, error } = await supabase.from('media').select('*').eq('id', safeId).maybeSingle()
+  if (error) throw new Error(`media read failed: ${error.message}`)
+  const media = data ? { pathname: data.pathname, mimeType: data.mime_type, bytes: data.bytes } : null
   if (!media?.pathname || !ALLOWED_IMAGE_TYPES.has(media.mimeType) || Number(media.bytes) > 3 * 1024 * 1024) {
     throw new Error('Stored image is unavailable or invalid')
   }

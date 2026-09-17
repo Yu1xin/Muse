@@ -2,33 +2,30 @@ import crypto from 'node:crypto'
 import { Readable } from 'node:stream'
 import { get, put } from '@vercel/blob'
 import { requireUser } from './_auth.js'
+import { supabase } from './_supabase.js'
 
-const BASE = process.env.KV_REST_API_URL
-const TOKEN = process.env.KV_REST_API_TOKEN
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 const EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' }
 
 export const config = { api: { bodyParser: false } }
 
-async function redisGet(key) {
-  const response = await fetch(`${BASE}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  })
-  if (!response.ok) throw new Error(`KV read failed with ${response.status}`)
-  const { result } = await response.json()
-  if (!result) return null
-  const parsed = JSON.parse(result)
-  return typeof parsed === 'string' ? JSON.parse(parsed) : parsed
+async function loadMedia(id) {
+  const { data, error } = await supabase.from('media').select('*').eq('id', id).maybeSingle()
+  if (error) throw new Error(`media read failed: ${error.message}`)
+  if (!data) return null
+  return { id: data.id, pathname: data.pathname, mimeType: data.mime_type, bytes: data.bytes, createdAt: data.created_at }
 }
 
-async function redisSet(key, value) {
-  const response = await fetch(`${BASE}/set/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify(value),
+async function saveMedia(media) {
+  const { error } = await supabase.from('media').insert({
+    id: media.id,
+    pathname: media.pathname,
+    mime_type: media.mimeType,
+    bytes: media.bytes,
+    created_at: media.createdAt,
   })
-  if (!response.ok) throw new Error(`KV write failed with ${response.status}`)
+  if (error) throw new Error(`media write failed: ${error.message}`)
 }
 
 async function readBody(request) {
@@ -76,7 +73,7 @@ export default async function handler(req, res) {
         contentType: actualType,
         addRandomSuffix: true,
       })
-      await redisSet(`media-v1-${id}`, {
+      await saveMedia({
         id,
         pathname: blob.pathname,
         mimeType: actualType,
@@ -89,7 +86,7 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const id = safeId(req.query?.id)
       if (!id) return res.status(400).json({ error: 'Valid media id required' })
-      const media = await redisGet(`media-v1-${id}`)
+      const media = await loadMedia(id)
       if (!media?.pathname || !ALLOWED_TYPES.has(media.mimeType)) return res.status(404).json({ error: 'Image not found' })
       const result = await get(media.pathname, {
         access: 'private',
