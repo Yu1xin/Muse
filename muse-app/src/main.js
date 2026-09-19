@@ -453,7 +453,10 @@ async function askMuseAutonomous(roomId, threadMsgs) {
     })
     await saveMuseState(result.decision)
   }
-  if (result.shouldReply && !result.reply) throw new Error('Autonomous reply was empty')
+  if (result.shouldReply && !result.reply) {
+    console.error('[autonomous-reply] model returned empty reply text despite intending to reply', { disposition: result.disposition, raw })
+    result.reply = '（缪时好像走神了，一会儿再理你）'
+  }
   return result
 }
 
@@ -1537,7 +1540,7 @@ function render() {
         try {
           await autoReplyInRoom(state.room, key, message.threadId || message.id)
           document.getElementById('msg-list').innerHTML = msgListHTML(key)
-        } catch {}
+        } catch (error) { console.error('[auto-reply] failed', error) }
       } catch (error) {
         window.alert(error.message || '发送失败，请再试一次')
       } finally {
@@ -1572,7 +1575,7 @@ function render() {
         try {
           await autoReplyInRoom(state.room, key, tid)
           document.getElementById('msg-list').innerHTML = msgListHTML(key)
-        } catch {}
+        } catch (error) { console.error('[auto-reply] failed', error) }
       } catch (error) {
         window.alert(error.message || '发送失败，请再试一次')
         if (sendBtn) sendBtn.disabled = false
