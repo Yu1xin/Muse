@@ -430,6 +430,7 @@ async function askMuseAutonomous(roomId, threadMsgs) {
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
+      thinking: { type: 'disabled' },
       system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
       messages,
     }),
@@ -473,6 +474,7 @@ async function askMuse(roomId) {
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
+      thinking: { type: 'disabled' },
       system: buildCachedSystem([MUSE_PERSONA, config.extraSystem], [memory]),
       messages: [{
         role: 'user',
@@ -506,6 +508,7 @@ async function askMuseReply(roomId, threadMsgs) {
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
+      thinking: { type: 'disabled' },
       system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
       messages,
     }),
@@ -537,6 +540,7 @@ async function askMuseTool(tool, fields) {
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       max_tokens: 900,
+      thinking: { type: 'disabled' },
       system: buildCachedSystem([MUSE_PERSONA, toolSystem], [memory]),
       messages: [{ role: 'user', content: userContent }],
     }),

@@ -102,7 +102,7 @@ async function callClaude({ system, messages, maxTokens, tools }) {
       'x-api-key': ANTHROPIC_KEY,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: maxTokens, system, messages, ...(tools ? { tools } : {}) }),
+    body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: maxTokens, thinking: { type: 'disabled' }, system, messages, ...(tools ? { tools } : {}) }),
   })
   const data = await response.json()
   if (!response.ok) throw new Error(`Claude API ${response.status}: ${data?.error?.message || 'unknown error'}`)
