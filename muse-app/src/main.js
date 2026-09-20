@@ -767,6 +767,15 @@ function threadHTML({ threadId, msgs: tMsgs }) {
   </div>`
 }
 
+function threadPileItemHTML(thread) {
+  const first = thread.msgs[0]
+  const preview = first?.text ? esc(first.text).slice(0, 22) : (first?.attachments?.length ? '[图片]' : '（没有文字）')
+  return `<details class="thread-pile-item">
+    <summary><span class="pile-icon">◇</span><span class="thread-pile-summary-text"><strong>${preview}</strong><small>${esc(first?.time || '')} · ${thread.msgs.length}条</small></span></summary>
+    <div class="thread-pile-body" data-thread-id="${esc(thread.threadId)}"></div>
+  </details>`
+}
+
 function msgListHTML(key) {
   const msgs = getMessages(key)
   if (!msgs.length) return '<p class="empty chat-empty">还没有聊天，从第一句开始吧</p>'
@@ -775,18 +784,19 @@ function msgListHTML(key) {
   const older = threads.slice(1).reverse()
   const pileName = key === ROOMS.bedroom.key ? '缪时的睡衣口袋' : '缪时的笔记本'
   return `${older.length ? `
-    <details class="pajama-pile">
-      <summary><span class="pile-icon">◇</span><span><strong>${pileName}</strong><small>${older.length} 段收好的聊天</small></span></summary>
-      <div class="pile-threads" data-pile-key="${key}"></div>
-    </details>` : ''}
+    <div class="thread-archive">
+      <div class="thread-archive-label"><strong>${pileName}</strong><small>${older.length} 段收好的聊天</small></div>
+      ${older.map(threadPileItemHTML).join('')}
+    </div>` : ''}
     <div class="chat-current-label">最近</div>
     ${threadHTML(current)}`
 }
 
-function loadFoldedThreads(key, container) {
+function loadThreadPileBody(key, threadId, container) {
   if (!container || container.dataset.loaded === 'true') return
-  const older = groupThreads(getMessages(key)).slice(1).reverse()
-  container.innerHTML = older.map(threadHTML).join('')
+  const thread = groupThreads(getMessages(key)).find(t => String(t.threadId) === String(threadId))
+  if (!thread) return
+  container.innerHTML = threadHTML(thread)
   container.dataset.loaded = 'true'
 }
 
@@ -1600,9 +1610,10 @@ function render() {
     })
 
     msgList.addEventListener('click', async (e) => {
-      const pileSummary = e.target.closest('.pajama-pile > summary')
+      const pileSummary = e.target.closest('.thread-pile-item > summary')
       if (pileSummary) {
-        loadFoldedThreads(key, pileSummary.parentElement?.querySelector('.pile-threads'))
+        const body = pileSummary.parentElement?.querySelector('.thread-pile-body')
+        loadThreadPileBody(key, body?.dataset.threadId, body)
         return
       }
       const deleteBtn = e.target.closest('.delete-msg-btn')
