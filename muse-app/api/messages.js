@@ -430,6 +430,20 @@ async function removeClaimedMemoryMessages(batch) {
   await redisSet(MEMORY_BUFFER_KEY, buffer.filter(item => !claimedIds.has(String(item.messageId || ''))))
 }
 
+async function extractBatchWithSplit(batch) {
+  try {
+    await extractAndStoreMemories(batch)
+  } catch (error) {
+    if (batch.length > 1 && /token limit/.test(error.message)) {
+      const mid = Math.ceil(batch.length / 2)
+      await extractBatchWithSplit(batch.slice(0, mid))
+      await extractBatchWithSplit(batch.slice(mid))
+      return
+    }
+    throw error
+  }
+}
+
 async function maybeExtractMemoryBatch() {
   let claimedBatch = []
   try {
@@ -437,7 +451,7 @@ async function maybeExtractMemoryBatch() {
     if (!Array.isArray(buffer) || buffer.length < MEMORY_BATCH_SIZE) return false
     claimedBatch = buffer.slice(0, MEMORY_BATCH_SIZE)
     await redisSet(MEMORY_BUFFER_KEY, buffer.slice(MEMORY_BATCH_SIZE))
-    await extractAndStoreMemories(claimedBatch)
+    await extractBatchWithSplit(claimedBatch)
     return true
   } catch (error) {
     console.error('[memory-extraction] batch failed', { message: error?.message || String(error) })

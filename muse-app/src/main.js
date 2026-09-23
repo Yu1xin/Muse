@@ -406,16 +406,8 @@ function messageRequiresReply(text) {
   return /[?？]|(帮我|告诉我|回答我|怎么办|怎么做|你觉得|可不可以|能不能|救命|危险|受伤|胸痛|呼吸困难|想死|不想活|分手|对不起|别不理我)/i.test(text)
 }
 
-async function askMuseAutonomous(roomId, threadMsgs) {
+async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, memory, museState, conversationContext) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const latestUserMessage = [...threadMsgs].reverse().find(message => !message.fromMuse)
-  const latestUserText = latestUserMessage?.text || ''
-  const threadId = threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id
-  const [memory, museState, conversationContext] = await Promise.all([
-    getMuseMemoryContext(latestUserText),
-    getMuseState(),
-    getConversationContext(roomId, threadId, latestUserText),
-  ])
   const messages = threadMsgs
     .filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0))
     .slice(-30)
@@ -438,7 +430,23 @@ async function askMuseAutonomous(roomId, threadMsgs) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   const data = await res.json()
   const raw = (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('').trim()
-  const result = parseAutonomousReply(raw)
+  return { result: parseAutonomousReply(raw), raw, stopReason: data.stop_reason }
+}
+
+async function askMuseAutonomous(roomId, threadMsgs) {
+  const latestUserMessage = [...threadMsgs].reverse().find(message => !message.fromMuse)
+  const latestUserText = latestUserMessage?.text || ''
+  const threadId = threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id
+  const [memory, museState, conversationContext] = await Promise.all([
+    getMuseMemoryContext(latestUserText),
+    getMuseState(),
+    getConversationContext(roomId, threadId, latestUserText),
+  ])
+  let { result, raw, stopReason } = await requestAutonomousCompletion(roomId, threadMsgs, latestUserText, memory, museState, conversationContext)
+  if (result.shouldReply && !result.reply) {
+    console.error('[autonomous-reply] model returned empty reply text, retrying once', { disposition: result.disposition, stopReason, raw })
+    ;({ result, raw, stopReason } = await requestAutonomousCompletion(roomId, threadMsgs, latestUserText, memory, museState, conversationContext))
+  }
   if (messageRequiresReply(latestUserText) && result.disposition === 'no_reply') {
     result.disposition = 'defer'
     result.shouldReply = true
@@ -455,7 +463,7 @@ async function askMuseAutonomous(roomId, threadMsgs) {
     await saveMuseState(result.decision)
   }
   if (result.shouldReply && !result.reply) {
-    console.error('[autonomous-reply] model returned empty reply text despite intending to reply', { disposition: result.disposition, raw })
+    console.error('[autonomous-reply] model returned empty reply text on retry too, giving up', { disposition: result.disposition, stopReason, raw })
     result.reply = '（缪时好像走神了，一会儿再理你）'
   }
   return result
