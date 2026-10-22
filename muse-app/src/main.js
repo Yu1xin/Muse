@@ -327,10 +327,35 @@ status 只在 no_reply 时填写：用“#”开头，总长不超过10个字，
 function buildCachedSystem(staticParts, dynamicParts) {
   const blocks = []
   const staticText = staticParts.filter(Boolean).join('\n\n')
-  if (staticText) blocks.push({ type: 'text', text: staticText, cache_control: { type: 'ephemeral' } })
+  if (staticText) blocks.push({ type: 'text', text: staticText, cache_control: { type: 'ephemeral', ttl: '1h' } })
   const dynamicText = (dynamicParts || []).filter(Boolean).join('\n\n')
   if (dynamicText) blocks.push({ type: 'text', text: dynamicText })
   return blocks
+}
+
+// Cache the stable message history too: mark a breakpoint on the
+// second-to-last message so each turn's long tail reads from cache and only
+// the newest message(s) are billed at full price.
+function withHistoryCacheBreakpoint(messages) {
+  if (messages.length < 2) return messages
+  const target = messages[messages.length - 2]
+  const blocks = Array.isArray(target.content) ? target.content : [{ type: 'text', text: target.content || '' }]
+  if (!blocks.length) return messages
+  const lastIndex = blocks.length - 1
+  const marked = blocks.map((block, index) => index === lastIndex ? { ...block, cache_control: { type: 'ephemeral', ttl: '1h' } } : block)
+  return messages.map((message, index) => index === messages.length - 2 ? { ...message, content: marked } : message)
+}
+
+// Volatile per-turn context (mood/energy, rolling summary, retrieved memory)
+// must ride on the newest message, after the cache breakpoint above - putting
+// it in `system` (which renders before `messages`) would invalidate every
+// cached prefix on every turn, since it changes nearly every call.
+function appendTrailingContext(messages, dynamicText) {
+  if (!dynamicText?.trim() || !messages.length) return messages
+  const lastIndex = messages.length - 1
+  const last = messages[lastIndex]
+  const blocks = Array.isArray(last.content) ? last.content : [{ type: 'text', text: last.content || '' }]
+  return messages.map((message, index) => index === lastIndex ? { ...message, content: [...blocks, { type: 'text', text: dynamicText }] } : message)
 }
 
 // 日记保留为可阅读的回顾；主对话只注入后端按当前内容检索到的少量结构化记忆。
@@ -476,7 +501,7 @@ function messageRequiresReply(text) {
 
 async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, memory, museState, conversationContext) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const messages = threadMsgs
+  const rawMessages = threadMsgs
     .filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0))
     .slice(-30)
     .map(message => ({ role: message.fromMuse ? 'assistant' : 'user', content: claudeMessageContent(message) }))
@@ -484,6 +509,8 @@ async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, m
     ? museState.pendingResponses.map(item => `- id:${item.id}；主题:${item.topic}；来自:${item.room}`).join('\n')
     : '无'
   const stateContext = `【缪时此刻的可衰减状态】\n情绪：${museState.mood}\n身体感受：${museState.body}\n精力：${museState.energy}/100\n近期关系浓度：${museState.relationshipIntensity}/100\n待接回的回应：\n${pendingContext}\n这是缪时的角色状态，不是对小乖的诊断。`
+  const dynamicText = [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory].filter(Boolean).join('\n\n')
+  const messages = withHistoryCacheBreakpoint(appendTrailingContext(rawMessages, dynamicText))
   const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -491,7 +518,7 @@ async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, m
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       thinking: { type: 'disabled' },
-      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], []),
       messages,
     }),
   })
@@ -569,15 +596,17 @@ async function askMuseReply(roomId, threadMsgs) {
   const threadId = threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id
   const latestUserText = [...threadMsgs].reverse().find(message => !message.fromMuse)?.text || ''
   const conversationContext = await getConversationContext(roomId, threadId, latestUserText)
-  const messages = threadMsgs.filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0)).slice(-30).map(m => ({
+  const rawMessages = threadMsgs.filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0)).slice(-30).map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
     content: claudeMessageContent(m),
   }))
   const memory = await getMuseMemoryContext(latestUserText)
   // Claude API requires the last message to be from the user
-  if (messages.at(-1)?.role === 'assistant') {
-    messages.push({ role: 'user', content: '嗯' })
+  if (rawMessages.at(-1)?.role === 'assistant') {
+    rawMessages.push({ role: 'user', content: '嗯' })
   }
+  const dynamicText = [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory].filter(Boolean).join('\n\n')
+  const messages = withHistoryCacheBreakpoint(appendTrailingContext(rawMessages, dynamicText))
   const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -585,7 +614,7 @@ async function askMuseReply(roomId, threadMsgs) {
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       thinking: { type: 'disabled' },
-      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], []),
       messages,
     }),
   })
