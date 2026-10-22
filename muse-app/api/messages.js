@@ -78,6 +78,14 @@ function rowToMessage(row) {
   }
 }
 
+// 只有客厅和卧室可以多选整理聊天
+const THREAD_ORGANIZER_ROOMS = new Set(['room-living', 'room-bedroom'])
+
+function cleanThreadIds(value) {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map(Number).filter(id => Number.isSafeInteger(id) && id > 0))].slice(0, 200)
+}
+
 async function fetchRoomMessages(room) {
   const { data, error } = await supabase.from('messages').select('*').eq('room', room).order('id', { ascending: false })
   if (error) throw new Error(`messages read failed (${room}): ${error.message}`)
@@ -559,6 +567,49 @@ export default async function handler(req, res) {
     ])
     const memory = await Promise.allSettled([maybeExtractMemoryBatch()])
     return res.json({ ok: true, completed: [...first, ...memory].map(result => result.status) })
+  }
+
+  if (req.query?.action === 'threads') {
+    if (!THREAD_ORGANIZER_ROOMS.has(room)) return res.status(400).json({ error: 'room does not support thread organizing' })
+
+    if (req.method === 'GET') {
+      const { data, error } = await supabase.from('thread_meta').select('thread_id, group_name, hidden').eq('room', room)
+      if (error) throw new Error(`thread_meta read failed: ${error.message}`)
+      return res.json((data || []).map(row => ({ threadId: String(row.thread_id), group: row.group_name || null, hidden: !!row.hidden })))
+    }
+
+    const threadIds = cleanThreadIds(req.body?.threadIds)
+    if (!threadIds.length) return res.status(400).json({ error: 'threadIds required' })
+
+    if (req.method === 'PATCH') {
+      const patch = {}
+      if (req.body && 'group' in req.body) {
+        const group = req.body.group === null ? '' : String(req.body.group).trim().slice(0, 40)
+        patch.group_name = group || null
+      }
+      if (typeof req.body?.hidden === 'boolean') patch.hidden = req.body.hidden
+      if (!Object.keys(patch).length) return res.status(400).json({ error: 'group or hidden required' })
+      const updatedAt = new Date().toISOString()
+      const rows = threadIds.map(threadId => ({ room, thread_id: threadId, ...patch, updated_at: updatedAt }))
+      const { error } = await supabase.from('thread_meta').upsert(rows, { onConflict: 'room,thread_id' })
+      if (error) throw new Error(`thread_meta upsert failed: ${error.message}`)
+      return res.json({ ok: true })
+    }
+
+    if (req.method === 'DELETE') {
+      const { error } = await supabase.from('messages').delete().eq('room', room).in('thread_id', threadIds)
+      if (error) throw new Error(`messages thread delete failed: ${error.message}`)
+      const cleanup = await Promise.all([
+        supabase.from('thread_meta').delete().eq('room', room).in('thread_id', threadIds),
+        supabase.from('conversation_summaries').delete().eq('room', room).in('thread_id', threadIds.map(String)),
+      ])
+      for (const result of cleanup) {
+        if (result.error) console.error('[messages] thread delete cleanup failed', { message: result.error.message })
+      }
+      return res.json({ ok: true })
+    }
+
+    return res.status(405).end()
   }
 
   if (req.method === 'GET' && req.query?.action === 'context') {

@@ -113,6 +113,74 @@ async function deleteMessage(key, id) {
   msgCache[key] = getMessages(key).filter(m => Number(m.id) !== Number(id))
 }
 
+// ── 客厅/卧室：多选整理聊天（分组 / 隐藏 / 删除）────────────────────────────
+// 每段聊天（thread）的整理信息只存“被整理过的”那几段：{ group, hidden }
+const ORGANIZABLE_ROOM_KEYS = new Set([ROOMS.living.key, ROOMS.bedroom.key])
+const threadMetaCache = {}
+
+function threadMetaStorageKey(key) {
+  return `${key}-thread-meta`
+}
+
+async function loadThreadMeta(key) {
+  const meta = new Map()
+  threadMetaCache[key] = meta
+  if (!ORGANIZABLE_ROOM_KEYS.has(key)) return meta
+  try {
+    const rows = USE_API
+      ? await apiFetch(`/api/messages?room=${key}&action=threads`).then(res => res.ok ? res.json() : [])
+      : JSON.parse(localStorage.getItem(threadMetaStorageKey(key)) || '[]')
+    for (const row of Array.isArray(rows) ? rows : []) {
+      meta.set(String(row.threadId), { group: row.group || null, hidden: !!row.hidden })
+    }
+  } catch { /* 读不到整理信息时，所有聊天按“未分组、未隐藏”显示 */ }
+  return meta
+}
+
+function getThreadMeta(key, threadId) {
+  return threadMetaCache[key]?.get(String(threadId)) || { group: null, hidden: false }
+}
+
+async function updateThreadMeta(key, threadIds, patch) {
+  if (USE_API) {
+    const res = await apiFetch(`/api/messages?room=${key}&action=threads`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadIds, ...patch }),
+    })
+    if (!res.ok) throw new Error(`API ${res.status}`)
+  }
+  const meta = threadMetaCache[key] || (threadMetaCache[key] = new Map())
+  for (const threadId of threadIds) {
+    const next = { ...getThreadMeta(key, threadId), ...patch }
+    if (next.group === '') next.group = null
+    meta.set(String(threadId), next)
+  }
+  if (!USE_API) {
+    const rows = [...meta].map(([threadId, value]) => ({ threadId, ...value }))
+    localStorage.setItem(threadMetaStorageKey(key), JSON.stringify(rows))
+  }
+}
+
+async function deleteThreads(key, threadIds) {
+  const ids = new Set(threadIds.map(String))
+  if (USE_API) {
+    const res = await apiFetch(`/api/messages?room=${key}&action=threads`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadIds: threadIds.map(Number) }),
+    })
+    if (!res.ok) throw new Error(`API ${res.status}`)
+  }
+  msgCache[key] = getMessages(key).filter(m => !ids.has(String(m.threadId || m.id)))
+  for (const id of ids) threadMetaCache[key]?.delete(id)
+  if (!USE_API) {
+    localStorage.setItem(key, JSON.stringify(msgCache[key]))
+    const rows = [...(threadMetaCache[key] || [])].map(([threadId, value]) => ({ threadId, ...value }))
+    localStorage.setItem(threadMetaStorageKey(key), JSON.stringify(rows))
+  }
+}
+
 function esc(t) {
   return String(t || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
           .replace(/"/g,'&quot;').replace(/\n/g,'<br>')
@@ -259,10 +327,35 @@ status 只在 no_reply 时填写：用“#”开头，总长不超过10个字，
 function buildCachedSystem(staticParts, dynamicParts) {
   const blocks = []
   const staticText = staticParts.filter(Boolean).join('\n\n')
-  if (staticText) blocks.push({ type: 'text', text: staticText, cache_control: { type: 'ephemeral' } })
+  if (staticText) blocks.push({ type: 'text', text: staticText, cache_control: { type: 'ephemeral', ttl: '1h' } })
   const dynamicText = (dynamicParts || []).filter(Boolean).join('\n\n')
   if (dynamicText) blocks.push({ type: 'text', text: dynamicText })
   return blocks
+}
+
+// Cache the stable message history too: mark a breakpoint on the
+// second-to-last message so each turn's long tail reads from cache and only
+// the newest message(s) are billed at full price.
+function withHistoryCacheBreakpoint(messages) {
+  if (messages.length < 2) return messages
+  const target = messages[messages.length - 2]
+  const blocks = Array.isArray(target.content) ? target.content : [{ type: 'text', text: target.content || '' }]
+  if (!blocks.length) return messages
+  const lastIndex = blocks.length - 1
+  const marked = blocks.map((block, index) => index === lastIndex ? { ...block, cache_control: { type: 'ephemeral', ttl: '1h' } } : block)
+  return messages.map((message, index) => index === messages.length - 2 ? { ...message, content: marked } : message)
+}
+
+// Volatile per-turn context (mood/energy, rolling summary, retrieved memory)
+// must ride on the newest message, after the cache breakpoint above - putting
+// it in `system` (which renders before `messages`) would invalidate every
+// cached prefix on every turn, since it changes nearly every call.
+function appendTrailingContext(messages, dynamicText) {
+  if (!dynamicText?.trim() || !messages.length) return messages
+  const lastIndex = messages.length - 1
+  const last = messages[lastIndex]
+  const blocks = Array.isArray(last.content) ? last.content : [{ type: 'text', text: last.content || '' }]
+  return messages.map((message, index) => index === lastIndex ? { ...message, content: [...blocks, { type: 'text', text: dynamicText }] } : message)
 }
 
 // 日记保留为可阅读的回顾；主对话只注入后端按当前内容检索到的少量结构化记忆。
@@ -408,7 +501,7 @@ function messageRequiresReply(text) {
 
 async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, memory, museState, conversationContext) {
   const config = ROOM_REPLY_CONFIG[roomId] || ROOM_REPLY_CONFIG.bedroom
-  const messages = threadMsgs
+  const rawMessages = threadMsgs
     .filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0))
     .slice(-30)
     .map(message => ({ role: message.fromMuse ? 'assistant' : 'user', content: claudeMessageContent(message) }))
@@ -416,6 +509,8 @@ async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, m
     ? museState.pendingResponses.map(item => `- id:${item.id}；主题:${item.topic}；来自:${item.room}`).join('\n')
     : '无'
   const stateContext = `【缪时此刻的可衰减状态】\n情绪：${museState.mood}\n身体感受：${museState.body}\n精力：${museState.energy}/100\n近期关系浓度：${museState.relationshipIntensity}/100\n待接回的回应：\n${pendingContext}\n这是缪时的角色状态，不是对小乖的诊断。`
+  const dynamicText = [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory].filter(Boolean).join('\n\n')
+  const messages = withHistoryCacheBreakpoint(appendTrailingContext(rawMessages, dynamicText))
   const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -423,7 +518,7 @@ async function requestAutonomousCompletion(roomId, threadMsgs, latestUserText, m
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       thinking: { type: 'disabled' },
-      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], [stateContext, conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem, AUTONOMY_SYSTEM], []),
       messages,
     }),
   })
@@ -501,15 +596,17 @@ async function askMuseReply(roomId, threadMsgs) {
   const threadId = threadMsgs.at(-1)?.threadId || threadMsgs.at(-1)?.id
   const latestUserText = [...threadMsgs].reverse().find(message => !message.fromMuse)?.text || ''
   const conversationContext = await getConversationContext(roomId, threadId, latestUserText)
-  const messages = threadMsgs.filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0)).slice(-30).map(m => ({
+  const rawMessages = threadMsgs.filter(message => message.kind !== 'status' && Number(message.id) > Number(conversationContext.coveredThrough || 0)).slice(-30).map(m => ({
     role: m.fromMuse ? 'assistant' : 'user',
     content: claudeMessageContent(m),
   }))
   const memory = await getMuseMemoryContext(latestUserText)
   // Claude API requires the last message to be from the user
-  if (messages.at(-1)?.role === 'assistant') {
-    messages.push({ role: 'user', content: '嗯' })
+  if (rawMessages.at(-1)?.role === 'assistant') {
+    rawMessages.push({ role: 'user', content: '嗯' })
   }
+  const dynamicText = [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory].filter(Boolean).join('\n\n')
+  const messages = withHistoryCacheBreakpoint(appendTrailingContext(rawMessages, dynamicText))
   const res = await apiFetch('/api/claude', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -517,7 +614,7 @@ async function askMuseReply(roomId, threadMsgs) {
       model: 'claude-sonnet-5',
       max_tokens: config.maxTokens,
       thinking: { type: 'disabled' },
-      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], [conversationContext.summary ? `【刚才这次聊天的大致印象——已覆盖的原文不再读取】\n${conversationContext.summary}` : '', memory]),
+      system: buildCachedSystem([MUSE_PERSONA, `现在在${ROOM_CONTEXT[roomId]}。`, config.extraSystem], []),
       messages,
     }),
   })
@@ -775,29 +872,75 @@ function threadHTML({ threadId, msgs: tMsgs }) {
   </div>`
 }
 
-function threadPileItemHTML(thread) {
+function threadPileItemHTML(thread, { selecting = false, selected = false, hidden = false } = {}) {
   const first = thread.msgs[0]
   const preview = first?.text ? esc(first.text).slice(0, 22) : (first?.attachments?.length ? '[图片]' : '（没有文字）')
-  return `<details class="thread-pile-item">
-    <summary><span class="pile-icon">◇</span><span class="thread-pile-summary-text"><strong>${preview}</strong><small>${esc(first?.time || '')} · ${thread.msgs.length}条</small></span></summary>
-    <div class="thread-pile-body" data-thread-id="${esc(thread.threadId)}"></div>
+  const tid = esc(thread.threadId)
+  return `<details class="thread-pile-item${selected ? ' selected' : ''}${hidden ? ' is-hidden' : ''}" data-select-thread="${tid}">
+    <summary>${selecting ? '<span class="thread-check" aria-hidden="true"></span>' : '<span class="pile-icon">◇</span>'}<span class="thread-pile-summary-text"><strong>${preview}</strong><small>${esc(first?.time || '')} · ${thread.msgs.length}条</small></span></summary>
+    <div class="thread-pile-body" data-thread-id="${tid}"></div>
   </details>`
+}
+
+// 未分组的旧聊天直接列出；分了组的收进各自的文件夹，文件夹按组里最新一段的时间排
+function threadArchiveHTML(key, older, options) {
+  const ungrouped = []
+  const groups = new Map()
+  for (const thread of older) {
+    const group = getThreadMeta(key, thread.threadId).group
+    if (!group) { ungrouped.push(thread); continue }
+    if (!groups.has(group)) groups.set(group, [])
+    groups.get(group).push(thread)
+  }
+  const folders = [...groups].sort((a, b) => Number(a[1].at(-1).threadId) - Number(b[1].at(-1).threadId))
+  const itemHTML = thread => threadPileItemHTML(thread, { ...options, selected: options.selectedThreads.has(String(thread.threadId)) })
+  return `${folders.map(([group, threads]) => `
+    <details class="thread-folder">
+      <summary><span class="folder-icon">▸</span><strong>${esc(group)}</strong><small>${threads.length} 段</small></summary>
+      <div class="thread-folder-body">${threads.map(itemHTML).join('')}</div>
+    </details>`).join('')}
+    ${ungrouped.map(itemHTML).join('')}`
 }
 
 function msgListHTML(key) {
   const msgs = getMessages(key)
   if (!msgs.length) return '<p class="empty chat-empty">还没有聊天，从第一句开始吧</p>'
   const threads = groupThreads(msgs)
-  const current = threads[0]
-  const older = threads.slice(1).reverse()
   const pileName = key === ROOMS.bedroom.key ? '缪时的睡衣口袋' : '缪时的笔记本'
+  if (!ORGANIZABLE_ROOM_KEYS.has(key)) {
+    const older = threads.slice(1).reverse()
+    return `${older.length ? `
+      <div class="thread-archive">
+        <div class="thread-archive-label"><strong>${pileName}</strong><small>${older.length} 段收好的聊天</small></div>
+        ${older.map(thread => threadPileItemHTML(thread)).join('')}
+      </div>` : ''}
+      <div class="chat-current-label">最近</div>
+      ${threadHTML(threads[0])}`
+  }
+
+  const selecting = state.selectingThreads
+  const selectedThreads = state.selectedThreads
+  const visible = threads.filter(thread => !getThreadMeta(key, thread.threadId).hidden)
+  const hiddenThreads = threads.filter(thread => getThreadMeta(key, thread.threadId).hidden).reverse()
+  const current = visible[0]
+  const older = visible.slice(1).reverse()
+  const currentGroup = current ? getThreadMeta(key, current.threadId).group : null
+  const currentSelected = current && selectedThreads.has(String(current.threadId))
+
   return `${older.length ? `
     <div class="thread-archive">
       <div class="thread-archive-label"><strong>${pileName}</strong><small>${older.length} 段收好的聊天</small></div>
-      ${older.map(threadPileItemHTML).join('')}
+      ${threadArchiveHTML(key, older, { selecting, selectedThreads })}
     </div>` : ''}
-    <div class="chat-current-label">最近</div>
-    ${threadHTML(current)}`
+    ${hiddenThreads.length ? `
+    <div class="thread-archive thread-hidden-archive">
+      <button type="button" class="thread-hidden-toggle" id="thread-hidden-toggle">${state.showHiddenThreads ? '收起' : '查看'}已隐藏的聊天（${hiddenThreads.length}）</button>
+      ${state.showHiddenThreads ? hiddenThreads.map(thread => threadPileItemHTML(thread, { selecting, hidden: true, selected: selectedThreads.has(String(thread.threadId)) })).join('') : ''}
+    </div>` : ''}
+    ${current ? `
+    <div class="chat-current-label">最近${currentGroup ? ` · ${esc(currentGroup)}` : ''}</div>
+    ${selecting ? `<button type="button" class="thread-current-select${currentSelected ? ' selected' : ''}" data-select-thread="${esc(current.threadId)}"><span class="thread-check" aria-hidden="true"></span>选择最近这段</button>` : ''}
+    ${threadHTML(current)}` : '<p class="empty chat-empty">聊天都藏起来了，发一条新消息开始吧</p>'}`
 }
 
 function loadThreadPileBody(key, threadId, container) {
@@ -888,6 +1031,7 @@ function renderScene(roomId) {
       <header class="scene-header">
         <button class="back-btn" id="back-btn">‹</button>
         <span class="scene-title">${ROOMS[roomId].name}</span>
+        <button class="thread-select-btn" id="thread-select-btn" type="button">选择</button>
       </header>
       <div class="scene-bg chat-scene-bg">${svg}</div>
       <main class="chat-shell">
@@ -900,6 +1044,12 @@ function renderScene(roomId) {
           <button class="add-btn chat-send" id="add-btn" type="submit">发送</button>
           <button class="muse-btn chat-muse" id="muse-btn" type="button" title="让缪时主动开一段">✦</button>
         </form>
+        <div class="thread-select-bar" id="thread-select-bar" hidden>
+          <span class="thread-select-count" id="thread-select-count">选几段聊天</span>
+          <button type="button" class="thread-bar-btn" id="thread-group-btn" disabled>分组</button>
+          <button type="button" class="thread-bar-btn" id="thread-hide-btn" disabled>隐藏</button>
+          <button type="button" class="thread-bar-btn danger" id="thread-delete-btn" disabled>删除</button>
+        </div>
       </main>
     </div>`
 }
@@ -1323,6 +1473,9 @@ const state = {
   bookPage: { memory: 0, diary: 0 },
   composerImages: [],
   inlineComposerImages: {},
+  selectingThreads: false,
+  selectedThreads: new Set(),
+  showHiddenThreads: false,
   toolResults: {
     bar: '',
     study: '',
@@ -1346,10 +1499,13 @@ async function go(view, room = null) {
   state.view      = view
   state.room      = room
   state.modalOpen = false
+  state.selectingThreads = false
+  state.selectedThreads = new Set()
+  state.showHiddenThreads = false
   window.scrollTo(0, 0)
   // 预加载该房间的留言
   if (room && ROOMS[room]) {
-    await loadMessages(ROOMS[room].key)
+    await Promise.all([loadMessages(ROOMS[room].key), loadThreadMeta(ROOMS[room].key)])
     const latest = getMessages(ROOMS[room].key)[0]
     if (latest) requestBackgroundMaintenance(ROOMS[room].key, latest.threadId || latest.id)
   }
@@ -1535,9 +1691,74 @@ function render() {
       if (item) URL.revokeObjectURL(item.previewUrl)
       renderAttachmentPreview()
     })
-    const scrollToLatest = () => { msgList.scrollTop = msgList.scrollHeight }
+    let keepScrollOnce = false
+    const scrollToLatest = () => {
+      if (keepScrollOnce) { keepScrollOnce = false; return }
+      msgList.scrollTop = msgList.scrollHeight
+    }
     requestAnimationFrame(scrollToLatest)
     new MutationObserver(scrollToLatest).observe(msgList, { childList: true })
+
+    // ── 多选整理聊天 ──
+    const selectBar = document.getElementById('thread-select-bar')
+    const refreshThreadList = ({ keepScroll = false } = {}) => {
+      keepScrollOnce = keepScroll
+      msgList.innerHTML = msgListHTML(key)
+    }
+    const selectedIds = () => [...state.selectedThreads]
+    const updateSelectBar = () => {
+      const ids = selectedIds()
+      const allHidden = ids.length > 0 && ids.every(id => getThreadMeta(key, id).hidden)
+      document.getElementById('thread-select-count').textContent = ids.length ? `已选 ${ids.length} 段` : '选几段聊天'
+      document.getElementById('thread-hide-btn').textContent = allHidden ? '取消隐藏' : '隐藏'
+      for (const id of ['thread-group-btn', 'thread-hide-btn', 'thread-delete-btn']) {
+        document.getElementById(id).disabled = !ids.length
+      }
+    }
+    const setSelecting = selecting => {
+      state.selectingThreads = selecting
+      state.selectedThreads = new Set()
+      document.querySelector('.chat-page')?.classList.toggle('selecting', selecting)
+      document.getElementById('thread-select-btn').textContent = selecting ? '完成' : '选择'
+      document.getElementById('msg-form').hidden = selecting
+      selectBar.hidden = !selecting
+      if (selecting) document.getElementById('attachment-preview').hidden = true
+      else renderAttachmentPreview()
+      updateSelectBar()
+      refreshThreadList({ keepScroll: true })
+    }
+    const runThreadAction = async (button, action) => {
+      const ids = selectedIds()
+      if (!ids.length || button.disabled) return
+      button.disabled = true
+      try {
+        const done = await action(ids)
+        if (done !== false) setSelecting(false)
+      } catch (error) {
+        window.alert(error.message || '操作失败，请再试一次')
+      } finally {
+        updateSelectBar()
+      }
+    }
+
+    document.getElementById('thread-select-btn').addEventListener('click', () => setSelecting(!state.selectingThreads))
+
+    document.getElementById('thread-group-btn').addEventListener('click', event => runThreadAction(event.currentTarget, async ids => {
+      const existing = [...new Set([...(threadMetaCache[key]?.values() || [])].map(meta => meta.group).filter(Boolean))]
+      const name = window.prompt(`把选中的 ${ids.length} 段聊天放进哪个组？${existing.length ? `\n已有的组：${existing.join('、')}` : ''}\n留空 = 移出分组`, '')
+      if (name === null) return false
+      await updateThreadMeta(key, ids, { group: name.trim().slice(0, 40) || null })
+    }))
+
+    document.getElementById('thread-hide-btn').addEventListener('click', event => runThreadAction(event.currentTarget, async ids => {
+      const unhide = ids.every(id => getThreadMeta(key, id).hidden)
+      await updateThreadMeta(key, ids, { hidden: !unhide })
+    }))
+
+    document.getElementById('thread-delete-btn').addEventListener('click', event => runThreadAction(event.currentTarget, async ids => {
+      if (!window.confirm(`删除选中的 ${ids.length} 段聊天？里面的消息会全部删掉，找不回来。`)) return false
+      await deleteThreads(key, ids)
+    }))
 
     // Save message
     async function submitSceneMessage() {
@@ -1618,6 +1839,23 @@ function render() {
     })
 
     msgList.addEventListener('click', async (e) => {
+      if (e.target.closest('#thread-hidden-toggle')) {
+        state.showHiddenThreads = !state.showHiddenThreads
+        refreshThreadList({ keepScroll: true })
+        return
+      }
+      if (state.selectingThreads) {
+        const selectable = e.target.closest('.thread-pile-item > summary, .thread-current-select')?.closest('[data-select-thread]')
+        if (selectable) {
+          e.preventDefault()
+          const tid = selectable.dataset.selectThread
+          if (state.selectedThreads.has(tid)) state.selectedThreads.delete(tid)
+          else state.selectedThreads.add(tid)
+          selectable.classList.toggle('selected', state.selectedThreads.has(tid))
+          updateSelectBar()
+          return
+        }
+      }
       const pileSummary = e.target.closest('.thread-pile-item > summary')
       if (pileSummary) {
         const body = pileSummary.parentElement?.querySelector('.thread-pile-body')
